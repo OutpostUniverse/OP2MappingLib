@@ -1,0 +1,17 @@
+# CMake build folders (tools/build-native.ps1 uses build/ and build-x86/)
+build/
+build-*/
+out/
+
+# .NET build output
+bin/
+obj/
+*.user
+.vs/
+
+# Python
+__pycache__/
+*.pyc
+
+# Local reference sheet of the game's transition tiles (game artwork, not published)
+uebergaenge_alle.png

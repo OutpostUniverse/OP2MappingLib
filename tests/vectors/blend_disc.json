@@ -1,0 +1,15 @@
+{
+  "description": "40x40 map using the profile's standard mapping, every cell starting as mapping 0. Paint every cell 'mud' and resolve with no region (seed 1234). Then paint a disc of 'san' (centre 20,20, radius 6: cells with dx*dx+dy*dy <= 36) and resolve with no region (seed 1234). Hash the tile grid (mapping index per cell, row by row) with FNV-1a 64 over each value's 4 little-endian bytes.",
+  "profile": "profiles/op2.json",
+  "width": 40,
+  "height": 40,
+  "initialMapping": 0,
+  "seed": 1234,
+  "steps": [
+    {"paint": "mud", "cells": "all"},
+    {"resolve": null},
+    {"paint": "san", "disc": {"x": 20, "y": 20, "r": 6}},
+    {"resolve": null}
+  ],
+  "fnv1a64": "d33d22343ac4ecfd"
+}

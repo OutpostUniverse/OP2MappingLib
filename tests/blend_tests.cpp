@@ -1,0 +1,410 @@
+// Tests for op2maplib (terrain blending, cliffs, passable regions), through
+// the public C API only.
+//
+// Usage: op2maplib_tests <path to profiles/op2.json>
+//
+// No test framework: each CHECK prints the failing condition and the test
+// exits non-zero if any failed.
+//
+// The golden hashes below are shared with the language bindings (via
+// tests/vectors/), so they also check that every binding gets identical output.
+#include "op2maplib/op2maplib.h"
+
+#include <cmath>
+#include <cstdio>
+#include <fstream>
+#include <sstream>
+#include <string>
+#include <vector>
+
+// Number of failed CHECKs so far; non-zero makes main return 1.
+static int g_failures = 0;
+
+// Records a failure and carries on, so one run reports every broken check.
+#define CHECK(cond)                                                                 \
+    do {                                                                            \
+        if (!(cond)) {                                                              \
+            std::printf("  FAILED: %s  (%s:%d)\n", #cond, __FILE__, __LINE__);      \
+            ++g_failures;                                                           \
+        }                                                                           \
+    } while (0)
+
+namespace {
+
+// Size of every blend test map, and the default seed.
+constexpr int W = 40;
+constexpr int H = 40;
+constexpr uint64_t kSeed = 1234;
+
+// Whole file as a string; empty if it cannot be read (the profile load then fails).
+std::string readFile(const char* path) {
+    std::ifstream f(path, std::ios::binary);
+    std::stringstream ss;
+    ss << f.rdbuf();
+    return ss.str();
+}
+
+/// A map using the profile's standard mapping table, every cell holding `mapping`.
+struct TestMap {
+    std::vector<om_mapping> mappings;
+    om_blend_map* map = nullptr;
+
+    TestMap(const om_profile* p, int mapping) {
+        const int n = om_profile_standard_mapping_count(p);
+        mappings.resize(n);
+        for (int i = 0; i < n; ++i) om_profile_standard_mapping(p, i, &mappings[i]);
+        std::vector<uint16_t> cells(W * H, static_cast<uint16_t>(mapping));
+        char err[256];
+        map = om_blend_create(p, W, H, mappings.data(), n, cells.data(), err, sizeof err);
+        if (!map) std::printf("  om_blend_create failed: %s\n", err);
+    }
+    // om_blend_free accepts NULL, so a failed create needs no special case.
+    ~TestMap() { om_blend_free(map); }
+};
+
+// (x, y) pairs of the cells within radius r of (cx, cy), row by row.
+std::vector<int32_t> disc(int cx, int cy, int r) {
+    std::vector<int32_t> xy;
+    for (int y = cy - r; y <= cy + r; ++y)
+        for (int x = cx - r; x <= cx + r; ++x)
+            if ((x - cx) * (x - cx) + (y - cy) * (y - cy) <= r * r) {
+                xy.push_back(x);
+                xy.push_back(y);
+            }
+    return xy;
+}
+
+// Mapping index of every cell, row by row.
+std::vector<int> snapshot(const om_blend_map* m) {
+    std::vector<int> out(W * H);
+    for (int y = 0; y < H; ++y)
+        for (int x = 0; x < W; ++x) out[y * W + x] = om_blend_tile_at(m, x, y);
+    return out;
+}
+
+/// FNV-1a over the tile grid - the golden value pins the exact output.
+uint64_t hashGrid(const std::vector<int>& g) {
+    uint64_t h = 1469598103934665603ULL;
+    for (int v : g) {
+        for (int b = 0; b < 4; ++b) {
+            h ^= static_cast<uint8_t>(v >> (8 * b));
+            h *= 1099511628211ULL;
+        }
+    }
+    return h;
+}
+
+/// Paints the whole map with `ground` and resolves it.
+void fillWith(TestMap& tm, int ground) {
+    std::vector<int32_t> all;
+    for (int y = 0; y < H; ++y)
+        for (int x = 0; x < W; ++x) { all.push_back(x); all.push_back(y); }
+    om_blend_paint(tm.map, ground, all.data(), W * H);
+    om_blend_resolve(tm.map, nullptr, kSeed);
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
+    if (argc < 2) {
+        std::printf("usage: op2maplib_tests <profiles/op2.json>\n");
+        return 2;
+    }
+    std::printf("op2maplib %s\n", om_version());
+
+    const std::string json = readFile(argv[1]);
+    char err[256];
+    om_profile* p = om_profile_load(json.data(), json.size(), err, sizeof err);
+    if (!p) {
+        std::printf("FAILED to load profile: %s\n", err);
+        return 1;
+    }
+
+    // --- Profile -----------------------------------------------------------
+    std::printf("profile: %s\n", om_profile_name(p));
+    const int mud = om_profile_find_ground(p, "mud");
+    const int san = om_profile_find_ground(p, "san");
+    const int roc = om_profile_find_ground(p, "roc");
+    const int veg = om_profile_find_ground(p, "veg");
+    CHECK(mud >= 0 && san >= 0 && roc >= 0 && veg >= 0);
+    CHECK(om_profile_grounds_blend(p, mud, san) == 1);
+    CHECK(om_profile_grounds_blend(p, san, mud) == 1);
+    CHECK(om_profile_grounds_blend(p, mud, roc) == 1);
+    CHECK(om_profile_grounds_blend(p, mud, veg) == 0);
+    CHECK(om_profile_ground_fill_count(p, mud) > 0);
+    CHECK(om_profile_standard_mapping_count(p) == 2017);
+    for (int g = 0; g < om_profile_ground_count(p); ++g)
+        std::printf("  ground %d: %s (%s), %d fill tiles\n", g, om_profile_ground_id(p, g),
+                    om_profile_ground_name(p, g), om_profile_ground_fill_count(p, g));
+
+    // Bad input is reported, not crashed on.
+    CHECK(om_profile_load("{", 1, err, sizeof err) == nullptr && err[0] != '\0');
+    CHECK(om_profile_load("{\"format\":\"x\",\"version\":1}", 27, err, sizeof err) == nullptr);
+
+    // --- Fill a map with mud ----------------------------------------------
+    std::printf("fill\n");
+    TestMap a(p, 0);
+    CHECK(a.map != nullptr);
+    if (!a.map) return 1;
+    fillWith(a, mud);
+    for (int y = 0; y < H; ++y)
+        for (int x = 0; x < W; ++x) {
+            CHECK(om_blend_ground_at(a.map, x, y) == mud);
+            CHECK(om_blend_tile_role(a.map, x, y) == OM_TILE_FILL);
+        }
+    // Resolving again changes nothing.
+    CHECK(om_blend_resolve_all(a.map, kSeed) == 0);
+    // Fill uses a variety of tiles, not one repeated tile.
+    {
+        std::vector<int> g = snapshot(a.map);
+        int distinct = 0;
+        std::vector<bool> seen(4096, false);
+        for (int v : g) if (v >= 0 && v < 4096 && !seen[v]) { seen[v] = true; ++distinct; }
+        CHECK(distinct > 5);
+    }
+
+    // --- Paint a sand disc ---------------------------------------------------
+    std::printf("sand disc\n");
+    const std::vector<int> before = snapshot(a.map);
+    const std::vector<int32_t> sand = disc(20, 20, 6);
+    CHECK(om_blend_paint(a.map, san, sand.data(), static_cast<int32_t>(sand.size() / 2)) ==
+          static_cast<int>(sand.size() / 2));
+    const int changed = om_blend_resolve(a.map, nullptr, kSeed);
+    CHECK(changed > 0);
+    {
+        std::vector<om_change> changes(changed);
+        CHECK(om_blend_get_changes(a.map, changes.data(), changed) == changed);
+        for (const om_change& c : changes) {
+            CHECK(c.old_mapping == before[c.y * W + c.x]);
+            CHECK(c.new_mapping == om_blend_tile_at(a.map, c.x, c.y));
+            CHECK(c.cell_type >= -1 && c.cell_type < 32);
+        }
+    }
+    const std::vector<int> after = snapshot(a.map);
+    for (int y = 0; y < H; ++y) {
+        for (int x = 0; x < W; ++x) {
+            const bool inDisc = (x - 20) * (x - 20) + (y - 20) * (y - 20) <= 36;
+            const int ground = om_blend_ground_at(a.map, x, y);
+            const int role = om_blend_tile_role(a.map, x, y);
+            CHECK(ground == (inDisc ? san : mud));
+            // Sand is the pair's second ground: sand cells stay plain.
+            if (inDisc) CHECK(role == OM_TILE_FILL);
+            // Every mud cell touching sand holds a transition tile.
+            bool touchesSand = false;
+            for (int dy = -1; dy <= 1; ++dy)
+                for (int dx = -1; dx <= 1; ++dx)
+                    if (om_blend_ground_at(a.map, x + dx, y + dy) == san) touchesSand = true;
+            if (!inDisc && touchesSand) CHECK(role == OM_TILE_TRANSITION);
+            if (!inDisc && !touchesSand) CHECK(role == OM_TILE_FILL);
+            // Nothing changes outside the painted area plus one cell.
+            if (x < 13 || x > 27 || y < 13 || y > 27) CHECK(after[y * W + x] == before[y * W + x]);
+        }
+    }
+    // Stable: resolving the same area again changes nothing.
+    {
+        om_rect r{13, 13, 15, 15};
+        CHECK(om_blend_resolve(a.map, &r, kSeed) == 0);
+        CHECK(om_blend_resolve_all(a.map, 99) == 0);
+    }
+
+    // --- Determinism -------------------------------------------------------
+    std::printf("determinism\n");
+    {
+        TestMap b(p, 0);
+        fillWith(b, mud);
+        om_blend_paint(b.map, san, sand.data(), static_cast<int32_t>(sand.size() / 2));
+        om_blend_resolve(b.map, nullptr, kSeed);
+        CHECK(snapshot(b.map) == after);
+        const uint64_t h = hashGrid(after);
+        std::printf("  grid hash: %016llx\n", static_cast<unsigned long long>(h));
+        // Golden value: pins the exact output for this profile and seed so every
+        // platform and binding can be checked against it (tests/vectors/blend_disc.json).
+        // If an intended algorithm or profile change moves it, update both places.
+        CHECK(h == 0xd33d22343ac4ecfdULL);
+    }
+
+    // --- Rock next to the sand: three grounds meeting ------------------------
+    std::printf("three grounds\n");
+    {
+        std::vector<int32_t> rock;
+        for (int y = 14; y <= 26; ++y)
+            for (int x = 26; x <= 32; ++x) { rock.push_back(x); rock.push_back(y); }
+        om_blend_paint(a.map, roc, rock.data(), static_cast<int32_t>(rock.size() / 2));
+        CHECK(om_blend_resolve(a.map, nullptr, kSeed) > 0);
+        // Every non-fixed cell still holds a profile tile.
+        for (int y = 0; y < H; ++y)
+            for (int x = 0; x < W; ++x) CHECK(om_blend_tile_role(a.map, x, y) != OM_TILE_UNKNOWN);
+    }
+
+    // --- Fixed cells are never changed -------------------------------------
+    std::printf("fixed cells\n");
+    {
+        TestMap c(p, 0);
+        fillWith(c, mud);
+        // Find a standard mapping the profile doesn't know (e.g. a cliff or wall).
+        int unknown = -1;
+        for (int m = 0; m < om_profile_standard_mapping_count(p) && unknown < 0; ++m) {
+            om_blend_set_tile(c.map, 0, 0, m);
+            if (om_blend_tile_role(c.map, 0, 0) == OM_TILE_UNKNOWN) unknown = m;
+        }
+        CHECK(unknown >= 0);
+        om_blend_set_tile(c.map, 0, 0, om_blend_tile_at(a.map, 0, 0));
+        om_blend_set_tile(c.map, 10, 10, unknown);
+        CHECK(om_blend_ground_at(c.map, 10, 10) == -1);
+        const std::vector<int32_t> around = disc(10, 10, 3);
+        std::vector<int32_t> ring;
+        for (size_t i = 0; i < around.size(); i += 2)
+            if (!(around[i] == 10 && around[i + 1] == 10)) { ring.push_back(around[i]); ring.push_back(around[i + 1]); }
+        om_blend_paint(c.map, san, ring.data(), static_cast<int32_t>(ring.size() / 2));
+        om_blend_resolve(c.map, nullptr, kSeed);
+        CHECK(om_blend_tile_at(c.map, 10, 10) == unknown);
+        // Painting over it makes it a normal cell again.
+        const int32_t one[2] = {10, 10};
+        om_blend_paint(c.map, san, one, 1);
+        om_blend_resolve(c.map, nullptr, kSeed);
+        CHECK(om_blend_tile_role(c.map, 10, 10) == OM_TILE_FILL);
+    }
+
+    // --- Cliffs -----------------------------------------------------------------
+    std::printf("cliffs\n");
+    {
+        CHECK(om_profile_cliff_ground(p, mud) == 1);
+        CHECK(om_profile_cliff_ground(p, san) == 1);
+        CHECK(om_profile_cliff_ground(p, roc) == 0);   // rock uses the fallback (mud) cliffs
+
+        int32_t sx, sy;
+        om_cliff_snap_point(10, 10, 30, 11, &sx, &sy);
+        CHECK(sx == 30 && sy == 10);
+
+        // The L shape from op2-codegen-editor's screenshot: down, then right; high side left.
+        const int32_t pts[] = {20, 6, 20, 20, 36, 20};
+        TestMap c(p, 0);
+        fillWith(c, mud);
+        const std::vector<int> cliffBefore = snapshot(c.map);
+        const int n = om_blend_resolve_all(c.map, kSeed);   // settle, then draw
+        CHECK(n == 0);
+        const int drawn = om_cliff_draw(c.map, pts, 3, OM_CLIFF_HIGH_LEFT, 3.0, 7);
+        CHECK(drawn > 20);
+        CHECK(om_cliff_last_stage(c.map) >= 0);              // solved, not the greedy fallback
+        std::vector<om_change> changes(drawn > 0 ? drawn : 1);
+        om_blend_get_changes(c.map, changes.data(), drawn);
+        int high = 0, low = 0, north = 0;
+        for (int i = 0; i < drawn; ++i) {
+            const om_change& ch = changes[i];
+            CHECK(ch.old_mapping == cliffBefore[ch.y * W + ch.x]);
+            CHECK(om_blend_ground_at(c.map, ch.x, ch.y) == -1);   // cliffs are fixed
+            high += ch.cell_type == 9;
+            low += ch.cell_type == 10;
+            north += ch.cell_type == 8;
+            // Cliff stays near the line
+            CHECK(ch.x >= 14 && ch.x <= 40 && ch.y >= 2 && ch.y <= 27);
+        }
+        std::printf("  L shape: %d tiles (high %d, low %d, north %d), stage %d\n", drawn, high, low, north,
+                    om_cliff_last_stage(c.map));
+        CHECK(high > 0 && low > 0);
+
+        // Deterministic: the same draw on a fresh map gives the same grid.
+        TestMap d(p, 0);
+        fillWith(d, mud);
+        om_cliff_draw(d.map, pts, 3, OM_CLIFF_HIGH_LEFT, 3.0, 7);
+        const std::vector<int> grid = snapshot(c.map);
+        CHECK(snapshot(d.map) == grid);
+        const uint64_t h = hashGrid(grid);
+        std::printf("  cliff grid hash: %016llx\n", static_cast<unsigned long long>(h));
+        // Golden value, also in tests/vectors/cliff_l.json for the bindings.
+        CHECK(h == 0x5e0acf226271c020ULL);
+
+        // Painting sand around the cliff leaves the cliff alone.
+        std::vector<int32_t> around;
+        for (int y = 0; y < 30; ++y)
+            for (int x = 10; x < 40; ++x)
+                if (om_blend_ground_at(c.map, x, y) >= 0) { around.push_back(x); around.push_back(y); }
+        om_blend_paint(c.map, san, around.data(), static_cast<int32_t>(around.size() / 2));
+        om_blend_resolve(c.map, nullptr, kSeed);
+        for (int i = 0; i < drawn; ++i)
+            CHECK(om_blend_tile_at(c.map, changes[i].x, changes[i].y) == changes[i].new_mapping);
+
+        // Bad input
+        const int32_t outside[] = {0, 0, 500, 0};
+        CHECK(om_cliff_draw(c.map, outside, 2, OM_CLIFF_HIGH_NORTH, 3.0, 1) == -1);
+        CHECK(om_cliff_draw(c.map, pts, 1, OM_CLIFF_HIGH_NORTH, 3.0, 1) == -1);
+        CHECK(om_cliff_draw(c.map, pts, 3, 9, 3.0, 1) == -1);
+    }
+
+    // --- Passable regions (enclosed areas) ----------------------------------------
+    std::printf("regions\n");
+    {
+        constexpr uint8_t kPass = 0, kWall = 23, kCliff = 9, kTube = 26;
+        const int rw = 20, rh = 12;
+        std::vector<uint8_t> cells(rw * rh, kPass);
+        // A wall ring around a 3x3 pocket at (3..5, 3..5)
+        for (int y = 2; y <= 6; ++y)
+            for (int x = 2; x <= 6; ++x)
+                if (x == 2 || x == 6 || y == 2 || y == 6) cells[y * rw + x] = kWall;
+        // A cliff ring around a 2x2 pocket at (12..13, 4..5); one ring corner is a wall instead.
+        for (int y = 3; y <= 6; ++y)
+            for (int x = 11; x <= 14; ++x)
+                if (x == 11 || x == 14 || y == 3 || y == 6) cells[y * rw + x] = kCliff;
+        cells[6 * rw + 14] = kWall;
+        // Tubes are passable: a tube cell inside the first pocket stays part of it.
+        cells[4 * rw + 4] = kTube;
+
+        CHECK(om_cell_types_passable_mask() & (1u << 26));
+        CHECK(!(om_cell_types_passable_mask() & (1u << 23)));
+        CHECK(om_regions_op2_flags(512, 256) & OM_REGIONS_WRAP_X);
+        CHECK(!(om_regions_op2_flags(256, 128) & OM_REGIONS_WRAP_X));
+
+        om_regions* reg = om_regions_find(rw, rh, cells.data(), 0, om_regions_op2_flags(rw, rh));
+        CHECK(reg != nullptr);
+        CHECK(om_regions_count(reg) == 3);                     // main area + 2 pockets
+        CHECK(om_regions_size(reg, 1) == 9);                   // 3x3 pocket (largest enclosed)
+        CHECK(om_regions_size(reg, 2) == 4);                   // 2x2 pocket
+        // Main area: 20 x 11 usable rows = 220, minus the wall ring (16), the cliff ring (12) and both pockets (13).
+        CHECK(om_regions_size(reg, 0) == 179);
+        CHECK(om_regions_at(reg, 4, 4) == 1);                  // the tube cell
+        CHECK(om_regions_at(reg, 2, 2) == -1);                 // wall
+        CHECK(om_regions_at(reg, 0, rh - 1) == -1);            // bottom row skipped
+        CHECK(om_regions_enclosed_size(reg) == 13);
+        std::vector<int32_t> xy(2 * 13);
+        CHECK(om_regions_enclosed_cells(reg, xy.data(), 13) == 13);
+        om_regions_free(reg);
+
+        // Diagonal gap: open the pocket's corner diagonally. 8-connected joins it, 4-connected doesn't.
+        std::vector<uint8_t> diag(rw * rh, kWall);
+        diag[2 * rw + 2] = kPass;                              // cell A
+        diag[3 * rw + 3] = kPass;                              // cell B, touching A only at a corner
+        om_regions* d8 = om_regions_find(rw, rh, diag.data(), 0, OM_REGIONS_CONNECT8);
+        om_regions* d4 = om_regions_find(rw, rh, diag.data(), 0, 0);
+        CHECK(om_regions_count(d8) == 1);
+        CHECK(om_regions_count(d4) == 2);
+        om_regions_free(d8);
+        om_regions_free(d4);
+
+        // World map: a strip touching both side edges is one region only when wrapping.
+        std::vector<uint8_t> world(512 * 256, kWall);
+        for (int x = 0; x < 3; ++x) world[100 * 512 + x] = kPass;
+        for (int x = 509; x < 512; ++x) world[100 * 512 + x] = kPass;
+        om_regions* wrap = om_regions_find(512, 256, world.data(), 0, om_regions_op2_flags(512, 256));
+        om_regions* nowrap = om_regions_find(512, 256, world.data(), 0, OM_REGIONS_CONNECT8 | OM_REGIONS_SKIP_BOTTOM_ROW);
+        CHECK(om_regions_count(wrap) == 1);
+        CHECK(om_regions_count(nowrap) == 2);
+        om_regions_free(wrap);
+        om_regions_free(nowrap);
+
+        CHECK(om_regions_find(0, 5, cells.data(), 0, 0) == nullptr);
+        CHECK(om_regions_count(nullptr) == 0);
+    }
+
+    // --- Null safety ---------------------------------------------------------
+    CHECK(om_blend_resolve(nullptr, nullptr, 0) == -1);
+    CHECK(om_blend_ground_at(nullptr, 0, 0) == -1);
+    CHECK(om_blend_paint(a.map, 999, nullptr, 0) == -1);
+
+    om_profile_free(p);
+    if (g_failures) {
+        std::printf("%d check(s) FAILED\n", g_failures);
+        return 1;
+    }
+    std::printf("all checks passed\n");
+    return 0;
+}

@@ -1,0 +1,40 @@
+// Windows version information for op2maplib.dll (shown in Explorer's Details tab).
+// The version numbers come from CMakeLists.txt (project VERSION), which passes
+// them as OM_VER_MAJOR / OM_VER_MINOR / OM_VER_PATCH. Only built on Windows and
+// only for the shared library.
+#include <winver.h>
+
+// Two-step stringizing so the macro values, not their names, become strings.
+#define OM_STR2(x) #x
+#define OM_STR(x) OM_STR2(x)
+#define OM_VERSION_DOTTED OM_STR(OM_VER_MAJOR) "." OM_STR(OM_VER_MINOR) "." OM_STR(OM_VER_PATCH) ".0"
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION    OM_VER_MAJOR, OM_VER_MINOR, OM_VER_PATCH, 0
+ PRODUCTVERSION OM_VER_MAJOR, OM_VER_MINOR, OM_VER_PATCH, 0
+ FILEFLAGSMASK  VS_FFI_FILEFLAGSMASK
+ FILEFLAGS      0
+ FILEOS         VOS_NT_WINDOWS32
+ FILETYPE       VFT_DLL
+ FILESUBTYPE    VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        // 0409 = US English, 04b0 = Unicode code page (matches "Translation" below).
+        BLOCK "040904b0"
+        BEGIN
+            VALUE "CompanyName",      "Outpost Universe"
+            VALUE "FileDescription",  "op2maplib - Outpost 2 map-editing algorithms"
+            VALUE "FileVersion",      OM_VERSION_DOTTED
+            VALUE "InternalName",     "op2maplib"
+            VALUE "LegalCopyright",   "Copyright (C) Outpost Universe"
+            VALUE "OriginalFilename", "op2maplib.dll"
+            VALUE "ProductName",      "op2maplib"
+            VALUE "ProductVersion",   OM_VERSION_DOTTED
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 1200
+    END
+END

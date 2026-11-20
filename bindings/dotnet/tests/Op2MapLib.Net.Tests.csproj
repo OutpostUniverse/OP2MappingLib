@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Console test for the .NET binding. Build and run once per bitness:
+    msbuild Op2MapLib.Net.Tests.csproj /p:Configuration=Release /p:TestArch=x86
+    msbuild Op2MapLib.Net.Tests.csproj /p:Configuration=Release /p:TestArch=x64
+  then run bin\x86\Op2MapLib.Net.Tests.exe and bin\x64\Op2MapLib.Net.Tests.exe.
+-->
+<Project ToolsVersion="15.0" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
+  <PropertyGroup>
+    <Configuration Condition=" '$(Configuration)' == '' ">Release</Configuration>
+    <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
+    <ProjectGuid>{6B0E8E2A-3F5C-4C1B-9E0B-2D7A8C4F1A02}</ProjectGuid>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>Op2MapLibTests</RootNamespace>
+    <AssemblyName>Op2MapLib.Net.Tests</AssemblyName>
+    <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
+    <LangVersion>7.3</LangVersion>
+    <!-- TestArch (x86 / x64) picks the bitness; each gets its own bin\ and obj\ folder. -->
+    <TestArch Condition=" '$(TestArch)' == '' ">x64</TestArch>
+    <!-- The exe is forced to that bitness (not AnyCPU), so the binding has to load
+         the matching x86\ or x64\ native DLL; Prefer32Bit off so x64 really is 64-bit. -->
+    <PlatformTarget>$(TestArch)</PlatformTarget>
+    <Prefer32Bit>false</Prefer32Bit>
+    <OutputPath>bin\$(TestArch)\</OutputPath>
+    <IntermediateOutputPath>obj\$(TestArch)\</IntermediateOutputPath>
+    <Optimize>true</Optimize>
+    <DebugType>pdbonly</DebugType>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="System" />
+    <Reference Include="System.Core" />
+    <Reference Include="System.Drawing" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+  </ItemGroup>
+  <!-- Referencing the project (not the DLL) also brings its content files into
+       bin\<TestArch>\: x86\ and x64\op2maplib.dll and op2maplib\op2.json. -->
+  <ItemGroup>
+    <ProjectReference Include="..\Op2MapLib.Net.csproj">
+      <Project>{6B0E8E2A-3F5C-4C1B-9E0B-2D7A8C4F1A01}</Project>
+      <Name>Op2MapLib.Net</Name>
+      <!-- The library is always AnyCPU: don't pass this test's bitness down to it. -->
+      <UndefineProperties>TestArch</UndefineProperties>
+    </ProjectReference>
+  </ItemGroup>
+  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+</Project>

@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  .NET Framework 4.8 class library wrapping the op2maplib C API.
+  Classic project format so it builds with the same MSBuild (VS 2022 Build
+  Tools) as OP2Mapper, with no SDK or NuGet downloads.
+
+  Projects that reference this one also receive, in their output folder:
+    x86\op2maplib.dll, x64\op2maplib.dll   native library, loaded by bitness
+    op2maplib\op2.json                      the Outpost 2 blend profile
+  The native DLLs come from native\ (refresh them with tools\build-native.ps1).
+-->
+<Project ToolsVersion="15.0" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
+  <PropertyGroup>
+    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
+    <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
+    <ProjectGuid>{6B0E8E2A-3F5C-4C1B-9E0B-2D7A8C4F1A01}</ProjectGuid>
+    <OutputType>Library</OutputType>
+    <RootNamespace>Op2MapLib</RootNamespace>
+    <AssemblyName>Op2MapLib.Net</AssemblyName>
+    <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
+    <LangVersion>7.3</LangVersion>
+    <FileAlignment>512</FileAlignment>
+    <Deterministic>true</Deterministic>
+    <!-- Ship Op2MapLib.Net.xml so IDEs show the doc comments; CS1591 (missing
+         XML comment) is silenced so undocumented members don't fail the build. -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>1591</NoWarn>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
+    <DebugSymbols>true</DebugSymbols>
+    <DebugType>full</DebugType>
+    <Optimize>false</Optimize>
+    <OutputPath>bin\Debug\</OutputPath>
+    <DefineConstants>DEBUG;TRACE</DefineConstants>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
+    <DebugType>pdbonly</DebugType>
+    <Optimize>true</Optimize>
+    <OutputPath>bin\Release\</OutputPath>
+    <DefineConstants>TRACE</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="System" />
+    <Reference Include="System.Core" />
+    <!-- For System.Drawing.Point / Rectangle in the public API (cells, regions). -->
+    <Reference Include="System.Drawing" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="Op2MapLib.cs" />
+    <Compile Include="Properties\AssemblyInfo.cs" />
+  </ItemGroup>
+  <!--
+    Runtime files. As Content with CopyToOutputDirectory they are copied to this
+    project's output and, through the project reference, to every referencing
+    project's output too. Link sets the path in the output folder:
+      native\x86 and native\x64 become x86\ and x64\, where the binding's static
+      constructor picks one by process bitness (so the library itself stays AnyCPU);
+      the profile is linked from the repository's profiles\ folder (single source,
+      not a copy) to op2maplib\op2.json, where BlendProfile.LoadDefault looks.
+  -->
+  <ItemGroup>
+    <Content Include="native\x86\op2maplib.dll">
+      <Link>x86\op2maplib.dll</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="native\x64\op2maplib.dll">
+      <Link>x64\op2maplib.dll</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="..\..\profiles\op2.json">
+      <Link>op2maplib\op2.json</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+</Project>

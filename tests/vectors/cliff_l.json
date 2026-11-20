@@ -1,0 +1,11 @@
+{
+  "description": "40x40 map using the profile's standard mapping, every cell starting as mapping 0. Paint every cell 'mud' and resolve with no region (seed 1234). Draw a cliff through (20,6) -> (20,20) -> (36,20), high side LEFT (0), wall height 3, seed 7. Hash the tile grid (mapping index per cell, row by row) with FNV-1a 64 over each value's 4 little-endian bytes.",
+  "profile": "profiles/op2.json",
+  "width": 40,
+  "height": 40,
+  "initialMapping": 0,
+  "fillGround": "mud",
+  "fillSeed": 1234,
+  "cliff": {"points": [[20, 6], [20, 20], [36, 20]], "highSide": 0, "wallHeight": 3.0, "seed": 7},
+  "fnv1a64": "5e0acf226271c020"
+}
