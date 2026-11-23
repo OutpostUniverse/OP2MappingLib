@@ -229,7 +229,7 @@ def _load():
         "om_mapgen_stat": (ctypes.c_double, [P, ctypes.c_char_p]),
         "om_mapgen_ground_share": (ctypes.c_double, [P, ctypes.c_int]),
         "om_mapgen_feature_count": (ctypes.c_int, [P]),
-        "om_mapgen_feature": (ctypes.c_int, [P, ctypes.c_int] + [ctypes.POINTER(ctypes.c_int32)] * 4),
+        "om_mapgen_get_feature": (ctypes.c_int, [P, ctypes.c_int] + [ctypes.POINTER(ctypes.c_int32)] * 4),
         "om_mapgen_feature_report": (ctypes.c_int, [P, ctypes.c_int]),
     }
     for name, (res, args) in sig.items():
@@ -853,7 +853,7 @@ class GeneratedMap:
         feats = []
         for i in range(_lib.om_mapgen_feature_count(h)):
             v = [ctypes.c_int32() for _ in range(4)]
-            _lib.om_mapgen_feature(h, i, *[ctypes.byref(x) for x in v])
+            _lib.om_mapgen_get_feature(h, i, *[ctypes.byref(x) for x in v])
             feats.append(tuple(x.value for x in v))
         return cls(w, ht, list(tiles), list(cells), lists[0], lists[1], zones, stats,
                    shares, feats, [_lib.om_mapgen_feature_report(h, k) for k in range(5)])

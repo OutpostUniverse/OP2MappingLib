@@ -462,7 +462,7 @@ OM_API double OM_CALL om_mapgen_ground_share(const om_mapgen_result* result, int
 /** Features as placed: count, and per feature its kind, position and size (radius or width). */
 OM_API int OM_CALL om_mapgen_feature_count(const om_mapgen_result* result);
 /** Fills the outputs (any may be NULL). Returns 1, or 0 if the index is out of range. */
-OM_API int OM_CALL om_mapgen_feature(const om_mapgen_result* result, int index,
+OM_API int OM_CALL om_mapgen_get_feature(const om_mapgen_result* result, int index,
                                      int32_t* kind, int32_t* x, int32_t* y, int32_t* size);
 /** Per feature kind: cliff cells it produced (clearings: how many were placed). */
 OM_API int OM_CALL om_mapgen_feature_report(const om_mapgen_result* result, int kind);

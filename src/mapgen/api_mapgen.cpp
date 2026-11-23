@@ -228,7 +228,7 @@ OM_API int OM_CALL om_mapgen_feature_count(const om_mapgen_result* result) {
     return result ? static_cast<int>(result->result.featureSpots.size()) : 0;
 }
 
-OM_API int OM_CALL om_mapgen_feature(const om_mapgen_result* result, int index,
+OM_API int OM_CALL om_mapgen_get_feature(const om_mapgen_result* result, int index,
                                      int32_t* kind, int32_t* x, int32_t* y, int32_t* size) {
     if (!result || index < 0 || index >= static_cast<int>(result->result.featureSpots.size())) return 0;
     const auto& s = result->result.featureSpots[static_cast<size_t>(index)];

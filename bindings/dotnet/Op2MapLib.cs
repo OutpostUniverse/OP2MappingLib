@@ -915,7 +915,7 @@ namespace Op2MapLib
             Features = new (MapFeature, int, int, int)[Native.om_mapgen_feature_count(r)];
             for (int i = 0; i < Features.Length; i++)
             {
-                Native.om_mapgen_feature(r, i, out int kind, out int x, out int y, out int size);
+                Native.om_mapgen_get_feature(r, i, out int kind, out int x, out int y, out int size);
                 Features[i] = ((MapFeature)kind, x, y, size);
             }
         }
@@ -1102,7 +1102,7 @@ namespace Op2MapLib
         [DllImport(Lib, CallingConvention = CC)] internal static extern double om_mapgen_ground_share(IntPtr r, int ground);
         [DllImport(Lib, CallingConvention = CC)] internal static extern int om_mapgen_feature_count(IntPtr r);
         [DllImport(Lib, CallingConvention = CC)]
-        internal static extern int om_mapgen_feature(IntPtr r, int index, out int kind, out int x, out int y, out int size);
+        internal static extern int om_mapgen_get_feature(IntPtr r, int index, out int kind, out int x, out int y, out int size);
         [DllImport(Lib, CallingConvention = CC)] internal static extern int om_mapgen_feature_report(IntPtr r, int kind);
     }
 }

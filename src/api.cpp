@@ -14,7 +14,7 @@
 #include <new>
 
 // Returned by om_version. Keep in step with project(VERSION) in CMakeLists.txt.
-#define OM_VERSION_STRING "0.3.2"
+#define OM_VERSION_STRING "0.3.3"
 
 using om::setError;
 

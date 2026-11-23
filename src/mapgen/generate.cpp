@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
+#include <tuple>
 #include <unordered_map>
 
 namespace om::gen {
