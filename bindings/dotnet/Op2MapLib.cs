@@ -743,6 +743,8 @@ namespace Op2MapLib
     /// <summary>
     /// Settings for generating a whole map (om_mapgen_settings_*). Start from a
     /// template, change settings, add features, then call <see cref="Generate"/>.
+    /// The map generator is a C++ port of fefi-byte's generator from
+    /// op2-codegen-editor (MIT, see THIRD-PARTY-NOTICES.md).
     /// </summary>
     /// <remarks>
     /// <code>

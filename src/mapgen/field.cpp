@@ -5,6 +5,8 @@
 // from mapgen_uebergaenge.py and the TEMPLATES table from mapgen_basis.py.
 // The stamp functions (_naht_passt, _scatter_details, _stamp_volcanoes) live
 // elsewhere.
+//
+// Ported from fefi-byte's op2-codegen-editor (MIT, see THIRD-PARTY-NOTICES.md).
 #include "mapgen.hpp"
 
 #include <cmath>

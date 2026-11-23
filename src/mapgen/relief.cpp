@@ -13,6 +13,8 @@
 //     the default rounding mode and is used wherever the original rounds.
 //   - landscapeFamilies / steerFeatureFamilies take the mud and sand family
 //     indices instead of the TileModel (that is all they read from it).
+//
+// Ported from fefi-byte's op2-codegen-editor (MIT, see THIRD-PARTY-NOTICES.md).
 #include "mapgen.hpp"
 
 #include <cmath>

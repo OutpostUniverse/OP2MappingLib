@@ -24,8 +24,9 @@
  *   - Objects returned by *_load / *_create / *_find are owned by the caller
  *     and must be released with the matching *_free (which accepts NULL).
  *
- * The blending approach and the Outpost 2 tile data come from
- * op2-codegen-editor (MIT licence).
+ * The blending approach, the cliff tool, the map generator and the Outpost 2
+ * tile data come from fefi-byte's op2-codegen-editor (MIT licence,
+ * github.com/fefi-byte/op2-codegen-editor; see THIRD-PARTY-NOTICES.md).
  */
 #ifndef OP2MAPLIB_H
 #define OP2MAPLIB_H

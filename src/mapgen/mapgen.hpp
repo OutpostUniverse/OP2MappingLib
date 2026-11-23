@@ -1,7 +1,8 @@
 // Map generator - internal C++ types and functions behind om_mapgen_*.
 //
-// Port of op2-codegen-editor's map generator (mapview/mapgen*.py,
-// shapegen.py). The layout layer (biome field, relief, features, volcano
+// Port of fefi-byte's map generator from op2-codegen-editor (mapview/mapgen*.py,
+// shapegen.py; MIT, github.com/fefi-byte/op2-codegen-editor). The design is
+// fefi-byte's; this is a C++ port of it. The layout layer (biome field, relief, features, volcano
 // sites, spawn points) is ported here; the tile layer reuses this library's
 // own engines: BlendMap::paint/resolve picks ground and transition tiles, and
 // BlendMap::drawCliff draws the cliffs along the highland contours.

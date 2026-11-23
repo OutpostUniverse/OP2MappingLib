@@ -3,6 +3,8 @@
 // Masks are 0/1 highland fields: blobs for mountains, a corridor for valleys,
 // a barrier with a gap for chokes, plus the clean-up passes (majority
 // smoothing, snapping edges to a coarser grid, removing specks and holes).
+//
+// Ported from fefi-byte's op2-codegen-editor (MIT, see THIRD-PARTY-NOTICES.md).
 #include "mapgen.hpp"
 
 #include <cmath>

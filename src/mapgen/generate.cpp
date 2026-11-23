@@ -9,6 +9,8 @@
 //     table; every cell is painted with its family and the map is resolved;
 //   - cliffs: each highland contour arc goes through BlendMap::drawCliff;
 //   - stamps (details, volcanoes) come from the profile's "generator" section.
+//
+// Ported from fefi-byte's op2-codegen-editor (MIT, see THIRD-PARTY-NOTICES.md).
 #include "generate.hpp"
 
 #include "../blend.hpp"

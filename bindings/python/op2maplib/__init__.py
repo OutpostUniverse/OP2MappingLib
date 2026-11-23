@@ -731,6 +731,9 @@ class FeatureKind:
 class MapGenerator:
     """Settings for generating a map (om_mapgen_settings_*).
 
+    The map generator is a C++ port of fefi-byte's generator from
+    op2-codegen-editor (MIT, see THIRD-PARTY-NOTICES.md).
+
         gen = MapGenerator("islands", width=128, height=128, seed=1234, spawns=2)
         gen.add_feature(FeatureKind.MOUNTAIN, where="c", size=0.6)
         result = gen.generate(profile)

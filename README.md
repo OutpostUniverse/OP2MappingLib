@@ -9,6 +9,14 @@ Draw Cliff and Find & Fix Enclosed Areas tools. The core is C++17
 with no dependencies, behind a plain C API, so any editor can use it: C/C++
 directly, .NET via P/Invoke, Python via ctypes, Rust, Delphi, WebAssembly.
 
+Much of op2maplib is **fefi-byte's work**: the terrain blending approach, the
+cliff tool, the learned Outpost 2 tile model and the whole map generator were
+designed and written by fefi-byte in
+[op2-codegen-editor](https://github.com/fefi-byte/op2-codegen-editor) and
+ported to C++ here (MIT, see [Credits](#credits)).
+
+New to the library? Start with [docs/using-op2maplib.md](docs/using-op2maplib.md).
+
 Modules:
 
 - **Terrain blending.** Paint a ground (mud, rock, sand, ...) onto cells, and
@@ -37,7 +45,8 @@ Modules:
   riverbeds), volcanoes with lava-possible zones, scattered rocks and craters,
   and spawn points. Grounds come from the blend engine and cliffs from the
   cliff tool, so a generated map follows the same tile rules as painting.
-  Ported from op2-codegen-editor's generator.
+  The generator was designed and written by fefi-byte for op2-codegen-editor;
+  this is a C++ port of it.
 
 ## Layout
 
@@ -230,8 +239,11 @@ brush, which learned them from the campaign maps.
 
 ## How the map generator works
 
-A port of op2-codegen-editor's generator (`mapview/mapgen*.py`,
-`shapegen.py`), in `src/mapgen/`:
+A C++ port of fefi-byte's map generator from op2-codegen-editor
+(`mapview/mapgen*.py`, `shapegen.py`), in `src/mapgen/`. The design (the
+layout, the relief and feature shapes, the landscape mode, the measured
+tuning behind its settings) is fefi-byte's; the port keeps it and swaps the
+tile layer for this library's engines:
 
 1. **Layout.** A value-noise field picks a ground per cell from the terrain
    mix; roughness sets the noise frequency. Then symmetry, majority smoothing,
@@ -333,10 +345,22 @@ Differences from the editor's generator:
 
 ## Credits
 
-The terrain blending rules, the cliff tool, the map generator and the Outpost 2
-tile model are ported from
-[op2-codegen-editor](https://github.com/fefi-byte/op2-codegen-editor) by
-fefi-byte, used under the MIT License. See `THIRD-PARTY-NOTICES.md`.
+**fefi-byte**, author of
+[op2-codegen-editor](https://github.com/fefi-byte/op2-codegen-editor), whose
+work much of this library is ported from (MIT License, see
+`THIRD-PARTY-NOTICES.md`):
+
+- **Map generator** (`src/mapgen/`): the whole design — biome layout,
+  templates, relief, valley/mountain/plateau/clearing/choke features, the New
+  Terra landscape mode, volcanoes and lava zones, scatter, spawn points — and
+  the measurements behind its defaults.
+- **Cliff tool** (`src/cliff.cpp`): the band-and-solver approach and its rules.
+- **Terrain blending**: the corner rule for transition tiles.
+- **Outpost 2 tile model**: everything `profiles/op2.json` is exported from,
+  learned from the campaign maps.
+
+The C++ port, the C API, the bindings, the profile format and the passable
+regions module are this project's.
 
 ## License
 

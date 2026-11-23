@@ -1,4 +1,6 @@
 // Passability, spawn points and connectivity (Python: mapgen_wege.py).
+//
+// Ported from fefi-byte's op2-codegen-editor (MIT, see THIRD-PARTY-NOTICES.md).
 #include "mapgen.hpp"
 
 #include <limits>
