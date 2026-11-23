@@ -395,6 +395,78 @@ int main(int argc, char** argv) {
         CHECK(om_regions_count(nullptr) == 0);
     }
 
+    // --- Map generator -------------------------------------------------------
+    std::printf("mapgen\n");
+    {
+        // Every template generates a plausible map.
+        for (const char* tpl : {"plains", "canyon", "desert", "islands", "ice", "newterra"}) {
+            om_mapgen_settings* s = om_mapgen_settings_create(tpl);
+            om_mapgen_set(s, "width", 64);
+            om_mapgen_set(s, "height", 64);
+            om_mapgen_set(s, "spawns", 2);
+            om_mapgen_set_seed(s, 5);
+            om_mapgen_result* r = om_mapgen_generate(p, s, err, sizeof err);
+            CHECK(r != nullptr);
+            if (r) {
+                CHECK(om_mapgen_width(r) == 64 && om_mapgen_height(r) == 64);
+                CHECK(om_mapgen_stat(r, "passable") > 0.85);
+                CHECK(om_mapgen_point_count(r, OM_MAPGEN_SPAWNS) == 2);
+                std::printf("  %-9s passable %.3f, plateau %.3f, details %.3f, volcanoes %d\n", tpl,
+                            om_mapgen_stat(r, "passable"), om_mapgen_stat(r, "plateau"),
+                            om_mapgen_stat(r, "details"), om_mapgen_point_count(r, OM_MAPGEN_VOLCANOES));
+            }
+            om_mapgen_result_free(r);
+            om_mapgen_settings_free(s);
+        }
+
+        // Golden map (tests/vectors/mapgen_islands.json): islands 64x64, seed 1234,
+        // cliffs 0.25, 2 spawns, one mountain feature. Same seed = same map.
+        auto golden = [&](std::vector<int>& tiles, std::vector<uint8_t>& cells) {
+            om_mapgen_settings* s = om_mapgen_settings_create("islands");
+            om_mapgen_set(s, "width", 64);
+            om_mapgen_set(s, "height", 64);
+            om_mapgen_set(s, "cliffs", 0.25);
+            om_mapgen_set(s, "spawns", 2);
+            om_mapgen_set_seed(s, 1234);
+            om_mapgen_add_feature(s, OM_FEATURE_MOUNTAIN, "c", "", 0.6, 0);
+            om_mapgen_result* r = om_mapgen_generate(p, s, err, sizeof err);
+            CHECK(r != nullptr);
+            if (r) {
+                std::vector<uint16_t> t(64 * 64);
+                cells.assign(64 * 64, 0);
+                om_mapgen_get_tiles(r, t.data(), 64 * 64);
+                om_mapgen_get_cell_types(r, cells.data(), 64 * 64);
+                tiles.assign(t.begin(), t.end());
+                CHECK(om_mapgen_stat(r, "connected") == 1.0);
+            }
+            om_mapgen_result_free(r);
+            om_mapgen_settings_free(s);
+        };
+        std::vector<int> t1, t2;
+        std::vector<uint8_t> c1, c2;
+        golden(t1, c1);
+        golden(t2, c2);
+        CHECK(t1 == t2 && c1 == c2);
+        int cliffCells = 0;
+        for (uint8_t c : c1) cliffCells += c == 8 || c == 9 || c == 10;
+        CHECK(cliffCells > 0);
+        char hex[17];
+        std::snprintf(hex, sizeof hex, "%016llx", static_cast<unsigned long long>(hashGrid(t1)));
+        std::printf("  golden map hash: %s, %d cliff cells\n", hex, cliffCells);
+        CHECK(std::string(hex) == "6c45f417758ec9c7");
+
+        // Settings API.
+        om_mapgen_settings* s = om_mapgen_settings_create(nullptr);
+        CHECK(om_mapgen_set(s, "no_such_key", 1) == -1);
+        CHECK(om_mapgen_set(s, "symmetry", 9) == -1);
+        CHECK(om_mapgen_set(s, "cliffs", 0.5) == 0 && om_mapgen_get(s, "cliffs") == 0.5);
+        CHECK(om_mapgen_add_feature(s, 7, "", "", 0.5, 0) == -1);
+        om_mapgen_set(s, "width", 8);
+        CHECK(om_mapgen_generate(p, s, err, sizeof err) == nullptr && err[0] != '\0');
+        om_mapgen_settings_free(s);
+        CHECK(om_mapgen_generate(nullptr, nullptr, err, sizeof err) == nullptr);
+    }
+
     // --- Null safety ---------------------------------------------------------
     CHECK(om_blend_resolve(nullptr, nullptr, 0) == -1);
     CHECK(om_blend_ground_at(nullptr, 0, 0) == -1);

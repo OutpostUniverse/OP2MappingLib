@@ -122,7 +122,68 @@ Profile Profile::fromJson(const char* text, size_t len) {
     }
 
     if (const json::Value* c = doc.find("cliffs")) p.cliffs.parse(*c, static_cast<int>(p.tilesets.size()));
+    if (const json::Value* g = doc.find("generator")) parseGenerator(p, *g);
     return p;
+}
+
+// The optional "generator" section: detail and volcano stamps, and the packed
+// tile pairs seen side by side (flat arrays a0, b0, a1, b1, ...).
+void Profile::parseGenerator(Profile& p, const json::Value& g) {
+    const int tilesetCount = static_cast<int>(p.tilesets.size());
+    auto stamps = [&](const char* key, std::vector<Stamp>& out) {
+        const json::Value* list = g.find(key);
+        if (!list) return;
+        for (const json::Value& s : list->array()) {
+            Stamp st;
+            if (const json::Value* n = s.find("name")) st.name = n->string();
+            if (const json::Value* gr = s.find("ground"); gr && !gr->string().empty()) {
+                st.ground = p.findGround(gr->string());
+                if (st.ground < 0) throw std::runtime_error("generator stamp: unknown ground \"" + gr->string() + "\"");
+            }
+            st.w = static_cast<int>(s.at("w").integer());
+            st.h = static_cast<int>(s.at("h").integer());
+            for (const json::Value& t : s.at("tiles").array()) {
+                const json::Array& a = t.array();
+                if (a.size() != 3) throw std::runtime_error("generator stamp tiles must be [tileset, image, cell]");
+                StampTile tile{static_cast<int>(a[0].integer()), static_cast<int>(a[1].integer()),
+                               static_cast<int>(a[2].integer())};
+                if (tile.tileset < 0 || tile.tileset >= tilesetCount)
+                    throw std::runtime_error("generator stamp refers to an unknown tileset index");
+                st.tiles.push_back(tile);
+            }
+            if (st.w <= 0 || st.h <= 0 || static_cast<int>(st.tiles.size()) != st.w * st.h)
+                throw std::runtime_error("generator stamp: \"tiles\" must hold w * h entries");
+            out.push_back(std::move(st));
+        }
+    };
+    stamps("details", p.generator.details);
+    stamps("volcanoes", p.generator.volcanoes);
+
+    auto pairs = [&](const char* key, std::unordered_map<uint64_t, uint8_t>& seen,
+                     std::unordered_map<uint32_t, uint8_t>& known) {
+        const json::Value* list = g.find(key);
+        if (!list) return;
+        const json::Array& a = list->array();
+        if (a.size() % 2) throw std::runtime_error(std::string("generator \"") + key + "\" must hold pairs");
+        seen.reserve(a.size() / 2);
+        for (size_t i = 0; i + 1 < a.size(); i += 2) {
+            const uint32_t x = static_cast<uint32_t>(a[i].integer());
+            const uint32_t y = static_cast<uint32_t>(a[i + 1].integer());
+            seen[(static_cast<uint64_t>(x) << 32) | y] = 1;
+            known[x] = 1;
+        }
+    };
+    pairs("right", p.generator.right, p.generator.rightKnown);
+    pairs("down", p.generator.down, p.generator.downKnown);
+}
+
+bool GeneratorData::seen(bool horizontal, uint32_t a, uint32_t b) const {
+    const auto& m = horizontal ? right : down;
+    return m.count((static_cast<uint64_t>(a) << 32) | b) != 0;
+}
+
+bool GeneratorData::known(bool horizontal, uint32_t a) const {
+    return (horizontal ? rightKnown : downKnown).count(a) != 0;
 }
 
 // Linear searches: profiles have only a handful of grounds and tilesets.

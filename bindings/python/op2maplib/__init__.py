@@ -7,6 +7,7 @@ Loads the op2maplib shared library and wraps its C API
     BlendMap  - the blend state of one map: paint grounds, resolve tiles,
                 draw cliffs
     Regions   - connected passable regions of a map (enclosed areas)
+    MapGenerator / GeneratedMap - generate a whole map from a seed
 
 plus the helpers version() and snap_cliff_point().
 
@@ -54,7 +55,7 @@ from pathlib import Path
 from typing import Iterable, Sequence
 
 __all__ = ["Profile", "BlendMap", "Change", "TileRole", "CliffSide", "Op2MapLibError", "version",
-           "snap_cliff_point", "Regions"]
+           "snap_cliff_point", "Regions", "MapGenerator", "GeneratedMap", "Symmetry", "FeatureKind"]
 
 
 class Op2MapLibError(RuntimeError):
@@ -204,6 +205,32 @@ def _load():
         "om_regions_at": (ctypes.c_int, [P, ctypes.c_int32, ctypes.c_int32]),
         "om_regions_enclosed_size": (ctypes.c_int, [P]),
         "om_regions_enclosed_cells": (ctypes.c_int, [P, ctypes.POINTER(ctypes.c_int32), ctypes.c_int32]),
+        "om_mapgen_settings_create": (P, [ctypes.c_char_p]),
+        "om_mapgen_settings_free": (None, [P]),
+        "om_mapgen_set": (ctypes.c_int, [P, ctypes.c_char_p, ctypes.c_double]),
+        "om_mapgen_get": (ctypes.c_double, [P, ctypes.c_char_p]),
+        "om_mapgen_set_seed": (None, [P, ctypes.c_uint64]),
+        "om_mapgen_clear_mix": (None, [P]),
+        "om_mapgen_set_mix": (ctypes.c_int, [P, ctypes.c_char_p, ctypes.c_double]),
+        "om_mapgen_clear_features": (None, [P]),
+        "om_mapgen_add_feature": (ctypes.c_int, [P, ctypes.c_int, ctypes.c_char_p, ctypes.c_char_p,
+                                                 ctypes.c_double, ctypes.c_int]),
+        "om_mapgen_generate": (P, [P, P, ctypes.c_char_p, ctypes.c_size_t]),
+        "om_mapgen_result_free": (None, [P]),
+        "om_mapgen_width": (ctypes.c_int32, [P]),
+        "om_mapgen_height": (ctypes.c_int32, [P]),
+        "om_mapgen_get_tiles": (ctypes.c_int, [P, ctypes.POINTER(ctypes.c_uint16), ctypes.c_int32]),
+        "om_mapgen_get_cell_types": (ctypes.c_int, [P, ctypes.POINTER(ctypes.c_uint8), ctypes.c_int32]),
+        "om_mapgen_point_count": (ctypes.c_int, [P, ctypes.c_int]),
+        "om_mapgen_get_points": (ctypes.c_int, [P, ctypes.c_int, ctypes.POINTER(ctypes.c_int32), ctypes.c_int32]),
+        "om_mapgen_lava_zone_count": (ctypes.c_int, [P]),
+        "om_mapgen_lava_zone_size": (ctypes.c_int, [P, ctypes.c_int]),
+        "om_mapgen_lava_zone_cells": (ctypes.c_int, [P, ctypes.c_int, ctypes.POINTER(ctypes.c_int32), ctypes.c_int32]),
+        "om_mapgen_stat": (ctypes.c_double, [P, ctypes.c_char_p]),
+        "om_mapgen_ground_share": (ctypes.c_double, [P, ctypes.c_int]),
+        "om_mapgen_feature_count": (ctypes.c_int, [P]),
+        "om_mapgen_feature": (ctypes.c_int, [P, ctypes.c_int] + [ctypes.POINTER(ctypes.c_int32)] * 4),
+        "om_mapgen_feature_report": (ctypes.c_int, [P, ctypes.c_int]),
     }
     for name, (res, args) in sig.items():
         fn = getattr(lib, name)
@@ -679,3 +706,154 @@ class Regions:
         buf = (ctypes.c_int32 * (2 * max(1, n)))()
         got = _lib.om_regions_enclosed_cells(self._h, buf, n)
         return [(buf[2 * i], buf[2 * i + 1]) for i in range(got)]
+
+
+# --- Map generator -------------------------------------------------------------
+
+class Symmetry:
+    """Symmetry modes of the map generator (om_mapgen_symmetry)."""
+    NONE = 0
+    MIRROR_X = 1    # left half mirrored onto the right (2 players)
+    MIRROR_Y = 2    # top half mirrored onto the bottom (2 players)
+    ROT180 = 3      # point-symmetric (2 players)
+    QUAD = 4        # four-fold mirrored (4 players)
+
+
+class FeatureKind:
+    """Terrain feature kinds (om_mapgen_feature)."""
+    VALLEY = 0
+    MOUNTAIN = 1
+    PLATEAU = 2
+    CLEARING = 3    # kept free of cliffs, volcanoes and scatter
+    CHOKE = 4       # a barrier across the map with one gap
+
+
+class MapGenerator:
+    """Settings for generating a map (om_mapgen_settings_*).
+
+        gen = MapGenerator("islands", width=128, height=128, seed=1234, spawns=2)
+        gen.add_feature(FeatureKind.MOUNTAIN, where="c", size=0.6)
+        result = gen.generate(profile)
+
+    Templates: plains, canyon, desert, islands, ice, newterra (unknown = plains).
+    Keyword arguments are numeric settings (see set()), plus seed.
+    """
+
+    def __init__(self, template: str = "plains", **settings):
+        self._h = _lib.om_mapgen_settings_create(template.encode())
+        if not self._h:
+            raise Op2MapLibError("could not create generator settings")
+        for key, value in settings.items():
+            self.set(key, value)
+
+    def close(self) -> None:
+        """Frees the native settings. Safe to call more than once."""
+        if getattr(self, "_h", None):
+            _lib.om_mapgen_settings_free(self._h)
+            self._h = None
+
+    def __del__(self):
+        self.close()
+
+    def set(self, key: str, value) -> None:
+        """Sets a numeric setting (om_mapgen_set) or the seed.
+
+        Keys: width, height, seed, roughness, symmetry (Symmetry), spawns,
+        spawn_clearance, cliffs, ramps, volcanoes, lava_zone_tiles, smooth,
+        vegetation_spacing, min_biome, details, landscape, rivers.
+
+        Raises:
+            KeyError: unknown key.
+        """
+        if key == "seed":
+            _lib.om_mapgen_set_seed(self._h, ctypes.c_uint64(int(value)))
+            return
+        if _lib.om_mapgen_set(self._h, key.encode(), float(value)) != 0:
+            raise KeyError(key)
+
+    def get(self, key: str) -> float:
+        """Current value of a numeric setting (0 for an unknown key)."""
+        return _lib.om_mapgen_get(self._h, key.encode())
+
+    def set_mix(self, mix: dict[str, float]) -> None:
+        """Replaces the terrain mix: ground id -> share, e.g. {"mud": 0.5, "roc": 0.5}."""
+        _lib.om_mapgen_clear_mix(self._h)
+        for ground_id, share in mix.items():
+            if _lib.om_mapgen_set_mix(self._h, ground_id.encode(), float(share)) != 0:
+                raise ValueError(f"bad mix entry {ground_id!r}: {share}")
+
+    def add_feature(self, kind: int, where: str = "", to: str = "", size: float = 0.5,
+                    lava: bool = False) -> None:
+        """Adds a terrain feature (FeatureKind). `where`/`to` are sectors
+        "nw","n","no","w","c","o","sw","s","so" ("" = the seed decides)."""
+        if _lib.om_mapgen_add_feature(self._h, int(kind), where.encode(), to.encode(),
+                                      float(size), int(bool(lava))) != 0:
+            raise ValueError(f"bad feature kind {kind}")
+
+    def clear_features(self) -> None:
+        _lib.om_mapgen_clear_features(self._h)
+
+    def generate(self, profile: Profile) -> "GeneratedMap":
+        """Generates the map (om_mapgen_generate).
+
+        Raises:
+            Op2MapLibError: the library rejected the settings; the message says why.
+        """
+        err = ctypes.create_string_buffer(512)
+        h = _lib.om_mapgen_generate(profile._h, self._h, err, len(err))
+        if not h:
+            raise Op2MapLibError(f"could not generate map: {err.value.decode(errors='replace')}")
+        try:
+            return GeneratedMap._from_handle(h, profile.ground_count)
+        finally:
+            _lib.om_mapgen_result_free(h)
+
+
+@dataclass
+class GeneratedMap:
+    """A generated map, copied out of the native result.
+
+    tiles are mapping indices into the profile's standard mapping table
+    (Profile.standard_mapping()), which a new map should use as its own;
+    cell_types are Outpost 2 cell types. Both are row by row.
+    """
+    width: int
+    height: int
+    tiles: list[int]
+    cell_types: list[int]
+    spawns: list[tuple[int, int]]
+    volcanoes: list[tuple[int, int]]
+    lava_zones: list[list[tuple[int, int]]]
+    stats: dict[str, float]
+    ground_shares: list[float]                 # per profile ground
+    features: list[tuple[int, int, int, int]]   # (kind, x, y, size)
+    feature_report: list[int]                   # per FeatureKind
+
+    @classmethod
+    def _from_handle(cls, h, ground_count: int) -> "GeneratedMap":
+        w, ht = _lib.om_mapgen_width(h), _lib.om_mapgen_height(h)
+        n = w * ht
+        tiles = (ctypes.c_uint16 * n)()
+        cells = (ctypes.c_uint8 * n)()
+        _lib.om_mapgen_get_tiles(h, tiles, n)
+        _lib.om_mapgen_get_cell_types(h, cells, n)
+
+        def pts(count, fetch):
+            buf = (ctypes.c_int32 * (2 * max(1, count)))()
+            got = fetch(buf, count)
+            return [(buf[2 * i], buf[2 * i + 1]) for i in range(got)]
+
+        lists = [pts(_lib.om_mapgen_point_count(h, k), lambda b, c, k=k: _lib.om_mapgen_get_points(h, k, b, c))
+                 for k in (0, 1)]
+        zones = [pts(_lib.om_mapgen_lava_zone_size(h, z), lambda b, c, z=z: _lib.om_mapgen_lava_zone_cells(h, z, b, c))
+                 for z in range(_lib.om_mapgen_lava_zone_count(h))]
+        stats = {k: _lib.om_mapgen_stat(h, k.encode())
+                 for k in ("passable", "plateau", "details", "rivers", "connected")}
+        shares = [_lib.om_mapgen_ground_share(h, g) for g in range(ground_count)]
+        feats = []
+        for i in range(_lib.om_mapgen_feature_count(h)):
+            v = [ctypes.c_int32() for _ in range(4)]
+            _lib.om_mapgen_feature(h, i, *[ctypes.byref(x) for x in v])
+            feats.append(tuple(x.value for x in v))
+        return cls(w, ht, list(tiles), list(cells), lists[0], lists[1], zones, stats,
+                   shares, feats, [_lib.om_mapgen_feature_report(h, k) for k in range(5)])

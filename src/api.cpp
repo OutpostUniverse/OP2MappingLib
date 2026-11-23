@@ -5,7 +5,7 @@
 // om::BlendMap (blend.cpp) and the cliff solver (cliff.cpp); this file only
 // checks arguments, guards against NULL handles and makes sure no C++
 // exception ever crosses the C boundary.
-#include "blend.hpp"
+#include "handles.hpp"
 
 #include <algorithm>
 #include <cstring>
@@ -14,33 +14,9 @@
 #include <new>
 
 // Returned by om_version. Keep in step with project(VERSION) in CMakeLists.txt.
-#define OM_VERSION_STRING "0.3.0"
+#define OM_VERSION_STRING "0.3.2"
 
-// Opaque handle types from the public header. Each wraps the C++ object; the
-// caller owns the handle and releases it with the matching *_free function.
-// Strings handed out by the API point into these objects and stay valid until
-// the handle is freed.
-struct om_profile {
-    om::Profile profile;
-};
-
-// The profile must outlive every blend map created from it (documented in the header).
-struct om_blend_map {
-    std::unique_ptr<om::BlendMap> map;
-};
-
-namespace {
-
-// Copies msg into the caller's error buffer, truncating to fit and always
-// terminating it. Does nothing if the caller passed no buffer.
-void setError(char* err, size_t size, const char* msg) {
-    if (!err || size == 0) return;
-    const size_t n = std::min(std::strlen(msg), size - 1);
-    std::memcpy(err, msg, n);
-    err[n] = '\0';
-}
-
-}  // namespace
+using om::setError;
 
 extern "C" {
 

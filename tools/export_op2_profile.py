@@ -348,6 +348,60 @@ def export_cliffs(mapview: Path, mappings: list, family_of: dict, ground_ids: li
     }
 
 
+def export_generator(m: dict, mappings: list, default_cell: dict) -> dict:
+    """The map generator's data (profile section "generator", see docs/profile-format.md).
+
+    - details:   scatter stamps (rocks, cracks, craters) larger than 1x1, with
+                 the ground they belong on (TileModel.details).
+    - volcanoes: volcano stamps cut from the original maps (TileModel.volcanoes).
+    - right/down: tile pairs seen side by side in the original maps, used to
+                 check a stamp's seam against the ground around it. Each tile
+                 is packed as tileset * 4096 + image.
+
+    Stamp tiles are written as [tileset, image, cell type]; most of them are
+    structure or decoration tiles that the "tiles" section leaves out.
+    """
+    def ref(t: int) -> list[int]:
+        ts, img = mappings[t]
+        return [ts, img, default_cell.get(t, -1)]
+
+    def packed(t: int) -> int:
+        ts, img = mappings[t]
+        return ts * 4096 + img
+
+    def stamps(sizes, offsets, flat):
+        """(w, h, tile refs) per stamp of a size/offset/tile triple."""
+        out = []
+        for i, (w, h) in enumerate(sizes.rows()):
+            block = flat.values[offsets.values[i]:offsets.values[i + 1]]
+            out.append((int(w), int(h), [ref(t) for t in block] if len(block) == w * h else None))
+        return out
+
+    details = []
+    fams = m["detail_families"].values
+    for i, (w, h, tiles) in enumerate(stamps(m["detail_sizes"], m["detail_offsets"], m["detail_tiles"])):
+        # 1x1 stamps are skipped, as in TileModel: a single tile looks like noise.
+        if tiles is not None and w * h > 1:
+            details.append({"ground": fams[i] if i < len(fams) else "", "w": w, "h": h, "tiles": tiles})
+
+    volcanoes = []
+    names = m["volcano_names"].values
+    for i, (w, h, tiles) in enumerate(stamps(m["volcano_sizes"], m["volcano_offsets"], m["volcano_tiles"])):
+        if names[i] and tiles is not None and w * h:
+            volcanoes.append({"name": names[i], "w": w, "h": h, "tiles": tiles})
+
+    def seen(key: str) -> list[int]:
+        """Distinct (left/top, right/bottom) pairs of one adjacency table, packed,
+        as one flat array a0, b0, a1, b1, ... (main() writes it on one line)."""
+        out = set()
+        for a, b, _count in m[key].rows():
+            if a < len(mappings) and b < len(mappings):
+                out.add((packed(a), packed(b)))
+        return [v for p in sorted(out) for v in p]
+
+    return {"details": details, "volcanoes": volcanoes, "right": seen("right"), "down": seen("down")}
+
+
 def main(argv: list[str]) -> int:
     """Exports the profile; argv as sys.argv. Returns the process exit code."""
     if len(argv) != 4:
@@ -474,11 +528,22 @@ def main(argv: list[str]) -> int:
         "tiles": tiles_out,
         "standardMapping": [[ts, img] for ts, img in mappings],
         "cliffs": export_cliffs(mapview, mappings, family_of, ground_ids, default_cell),
+        "generator": export_generator(m, mappings, default_cell),
     }
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    # The two pair tables hold ~60,000 numbers; indented they would put each on
+    # its own line and quadruple the file. Write them compact, on one line each.
+    gen = profile["generator"]
+    compact = {k: gen[k] for k in ("right", "down")}
+    for k in compact:
+        gen[k] = f"@@{k}@@"
+    text = json.dumps(profile, indent=1, separators=(",", ":"))
+    for k, values in compact.items():
+        text = text.replace(f'"@@{k}@@"', json.dumps(values, separators=(",", ":")))
+        gen[k] = values
     with out_path.open("w", encoding="utf-8", newline="\n") as f:
-        json.dump(profile, f, indent=1, separators=(",", ":"))
+        f.write(text)
         f.write("\n")
 
     # Summary
@@ -502,6 +567,9 @@ def main(argv: list[str]) -> int:
     no_inner = sum(1 for t in cl["tiles"] if t["inner"] is None)
     print(f"cliffs: {cl['families']} (min {cl['minTiles']} to draw), "
           f"{len(cl['tiles'])} tiles, {no_inner} without inner image")
+    gen = profile["generator"]
+    print(f"generator: {len(gen['details'])} detail stamps, {len(gen['volcanoes'])} volcanoes, "
+          f"{len(gen['right']) // 2} right pairs, {len(gen['down']) // 2} down pairs")
     return 0
 
 

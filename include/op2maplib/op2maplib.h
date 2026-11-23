@@ -327,6 +327,146 @@ OM_API int OM_CALL om_regions_enclosed_size(const om_regions* regions);
  */
 OM_API int OM_CALL om_regions_enclosed_cells(const om_regions* regions, int32_t* xy, int32_t max);
 
+/* ------------------------------------------------------------------------ */
+/* Map generator                                                             */
+/*                                                                           */
+/* Generates a whole map from a seed: a biome layout (terrain mix, roughness, */
+/* symmetry), relief (plateaus with ramps, valleys, mountains, chokes,        */
+/* clearings, the New Terra landscape mode with mesas and dry riverbeds),     */
+/* volcanoes with lava-possible zones, scattered rocks and craters, and spawn */
+/* points. Ground tiles come from the blend engine and cliffs from the cliff  */
+/* solver, so the tiles follow the same rules as painting. Tiles are mapping  */
+/* indices into the profile's standard mapping table                          */
+/* (om_profile_standard_mapping), which a new map should use as its own.      */
+/* Same profile, settings and seed give the same map.                         */
+
+/** Generator settings (defaults, a template, mix and features). */
+typedef struct om_mapgen_settings om_mapgen_settings;
+/** A generated map. */
+typedef struct om_mapgen_result om_mapgen_result;
+
+/** Symmetry modes (the "symmetry" setting). Quad suits four players, the others two. */
+typedef enum om_mapgen_symmetry {
+    OM_SYMMETRY_NONE     = 0,
+    OM_SYMMETRY_MIRROR_X = 1,   /* left half mirrored onto the right */
+    OM_SYMMETRY_MIRROR_Y = 2,   /* top half mirrored onto the bottom */
+    OM_SYMMETRY_ROT180   = 3,   /* point-symmetric */
+    OM_SYMMETRY_QUAD     = 4    /* four-fold mirrored */
+} om_mapgen_symmetry;
+
+/** Terrain feature kinds (om_mapgen_add_feature). */
+typedef enum om_mapgen_feature {
+    OM_FEATURE_VALLEY   = 0,
+    OM_FEATURE_MOUNTAIN = 1,
+    OM_FEATURE_PLATEAU  = 2,
+    OM_FEATURE_CLEARING = 3,   /* kept free of cliffs, volcanoes and scatter */
+    OM_FEATURE_CHOKE    = 4    /* a barrier across the map with one gap */
+} om_mapgen_feature;
+
+/** Point lists of a result (om_mapgen_point_count / om_mapgen_get_points). */
+typedef enum om_mapgen_points {
+    OM_MAPGEN_SPAWNS    = 0,
+    OM_MAPGEN_VOLCANOES = 1
+} om_mapgen_points;
+
+/**
+ * Creates settings from a template: "plains", "canyon", "desert", "islands",
+ * "ice" or "newterra" (NULL, "" or an unknown name = "plains"). The template
+ * sets the terrain mix, roughness, landscape mode and volcanoes; everything
+ * else starts at its default. Free with om_mapgen_settings_free.
+ */
+OM_API om_mapgen_settings* OM_CALL om_mapgen_settings_create(const char* template_name);
+OM_API void OM_CALL om_mapgen_settings_free(om_mapgen_settings* settings);
+
+/**
+ * Sets a numeric setting. Returns 0, or -1 for an unknown key. Keys (default):
+ *   width, height (128)     map size in cells, 16..1024 (OP2: powers of two)
+ *   roughness (template)    0 = soft large areas .. 1 = rugged
+ *   symmetry (0)            om_mapgen_symmetry
+ *   spawns (0)              spawn points; spawn_clearance (6) free radius each
+ *   cliffs (0)              plateau share; ramps (2) gaps per plateau ring
+ *   volcanoes (template)    with lava_zone_tiles (300) lava-possible cells each
+ *   smooth (2)              smoothing passes against specks
+ *   vegetation_spacing (1)  how far vegetation stays from rock, sand and snow
+ *   min_biome (0.006)       smallest biome patch, as a share of the map
+ *   details (0.5)           scatter density; 0.5 is about the original maps
+ *   landscape (template)    1 = New Terra relief mode
+ *   rivers (-1)             dry riverbeds in landscape mode, -1 = by map size
+ * The seed has its own setter (64 bits do not fit a double exactly).
+ */
+OM_API int OM_CALL om_mapgen_set(om_mapgen_settings* settings, const char* key, double value);
+/** Current value of a numeric setting, or 0 for an unknown key. */
+OM_API double OM_CALL om_mapgen_get(const om_mapgen_settings* settings, const char* key);
+OM_API void OM_CALL om_mapgen_set_seed(om_mapgen_settings* settings, uint64_t seed);
+
+/** Empties the terrain mix (the template's) before setting your own shares. */
+OM_API void OM_CALL om_mapgen_clear_mix(om_mapgen_settings* settings);
+/**
+ * Sets one ground's share of the terrain mix, by profile ground id ("mud",
+ * "roc", "san", "veg", "sno"). Shares need not add up to 1. Returns 0, or -1
+ * for a negative share or an empty id.
+ */
+OM_API int OM_CALL om_mapgen_set_mix(om_mapgen_settings* settings, const char* ground_id, double share);
+
+/** Removes all features. */
+OM_API void OM_CALL om_mapgen_clear_features(om_mapgen_settings* settings);
+/**
+ * Adds a terrain feature, placed before the random layout.
+ *   kind  : om_mapgen_feature
+ *   where : rough position, a sector of a 3x3 grid: "nw", "n", "no", "w",
+ *           "c", "o", "sw", "s", "so" (German compass: o = east); NULL or "" =
+ *           the seed decides
+ *   to    : valley/choke end sector; NULL or "" = opposite of `where`
+ *   size  : 0..1
+ *   lava  : valley only, nonzero = lava-possible floor
+ * Returns 0, or -1 for a bad kind.
+ */
+OM_API int OM_CALL om_mapgen_add_feature(om_mapgen_settings* settings, int kind, const char* where,
+                                         const char* to, double size, int lava);
+
+/**
+ * Generates a map. Returns NULL on failure (bad size, profile without a
+ * standard mapping table) with a message in err. Free with om_mapgen_result_free.
+ */
+OM_API om_mapgen_result* OM_CALL om_mapgen_generate(const om_profile* profile, const om_mapgen_settings* settings,
+                                                    char* err, size_t err_size);
+OM_API void OM_CALL om_mapgen_result_free(om_mapgen_result* result);
+
+OM_API int32_t OM_CALL om_mapgen_width(const om_mapgen_result* result);
+OM_API int32_t OM_CALL om_mapgen_height(const om_mapgen_result* result);
+/** Copies up to max mapping indices (standard mapping table), row by row. Returns the number copied. */
+OM_API int OM_CALL om_mapgen_get_tiles(const om_mapgen_result* result, uint16_t* out, int32_t max);
+/** Copies up to max cell types (0-31), row by row. Returns the number copied. */
+OM_API int OM_CALL om_mapgen_get_cell_types(const om_mapgen_result* result, uint8_t* out, int32_t max);
+
+/** Number of points in a list (om_mapgen_points). */
+OM_API int OM_CALL om_mapgen_point_count(const om_mapgen_result* result, int list);
+/** Copies up to max points of a list as (x, y) pairs. Returns the number copied. */
+OM_API int OM_CALL om_mapgen_get_points(const om_mapgen_result* result, int list, int32_t* xy, int32_t max);
+
+/** Lava-possible zones: one per volcano, plus one per lava valley. */
+OM_API int OM_CALL om_mapgen_lava_zone_count(const om_mapgen_result* result);
+OM_API int OM_CALL om_mapgen_lava_zone_size(const om_mapgen_result* result, int zone);
+/** Copies up to max cells of a zone as (x, y) pairs. Returns the number copied. */
+OM_API int OM_CALL om_mapgen_lava_zone_cells(const om_mapgen_result* result, int zone, int32_t* xy, int32_t max);
+
+/**
+ * Statistics: "passable" (share of passable cells), "plateau" (share of cliff
+ * cells), "details" (share covered by scatter), "rivers" (share of riverbed),
+ * "connected" (1 if all spawns reach each other). 0 for an unknown key.
+ */
+OM_API double OM_CALL om_mapgen_stat(const om_mapgen_result* result, const char* key);
+/** Share of the map covered by a profile ground (by the ground of its tiles). */
+OM_API double OM_CALL om_mapgen_ground_share(const om_mapgen_result* result, int ground);
+
+/** Features as placed: count, and per feature its kind, position and size (radius or width). */
+OM_API int OM_CALL om_mapgen_feature_count(const om_mapgen_result* result);
+/** Fills the outputs (any may be NULL). Returns 1, or 0 if the index is out of range. */
+OM_API int OM_CALL om_mapgen_feature(const om_mapgen_result* result, int index,
+                                     int32_t* kind, int32_t* x, int32_t* y, int32_t* size);
+/** Per feature kind: cliff cells it produced (clearings: how many were placed). */
+OM_API int OM_CALL om_mapgen_feature_report(const om_mapgen_result* result, int kind);
+
 #ifdef __cplusplus
 }
 #endif

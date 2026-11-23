@@ -16,6 +16,8 @@
 #include <unordered_map>
 #include <vector>
 
+namespace om::json { class Value; }
+
 namespace om {
 
 /// Corner key bits. A set bit means that corner belongs to the pair's second
@@ -41,6 +43,41 @@ struct ProfileTile {
     int cellType = -1;        ///< suggested cell type, -1 if unknown
 };
 
+/// One tile of a generator stamp: (tileset, image) plus its cell type.
+struct StampTile {
+    int tileset = 0;
+    int image = 0;
+    int cellType = -1;        ///< -1 if unknown
+};
+
+/// A ready-made block of tiles the map generator places in one piece
+/// (scatter detail or volcano).
+struct Stamp {
+    std::string name;         ///< volcanoes only, e.g. "rocvolc1"
+    int ground = -1;          ///< details: the ground it belongs on, -1 = any
+    int w = 0, h = 0;
+    std::vector<StampTile> tiles;   ///< w * h, row by row
+};
+
+/// The profile's optional "generator" section: stamps and the tile pairs seen
+/// side by side in the original maps (for checking a stamp's seam).
+struct GeneratorData {
+    std::vector<Stamp> details;
+    std::vector<Stamp> volcanoes;
+
+    /// Packs (tileset, image) as the profile does: tileset * 4096 + image.
+    static uint32_t pack(int tileset, int image) { return static_cast<uint32_t>(tileset) * 4096u + static_cast<uint32_t>(image); }
+    /// True if `b` was seen right of `a` (horizontal) or below `a` (vertical).
+    bool seen(bool horizontal, uint32_t a, uint32_t b) const;
+    /// True if `a` has any recorded neighbour in that direction; tiles without
+    /// any are not checked (Python: nachbarn() returning None).
+    bool known(bool horizontal, uint32_t a) const;
+
+    // pair key: a << 32 | b; known: a
+    std::unordered_map<uint64_t, uint8_t> right, down;
+    std::unordered_map<uint32_t, uint8_t> rightKnown, downKnown;
+};
+
 /// A terrain type such as mud or rock.
 struct Ground {
     std::string id;
@@ -64,6 +101,8 @@ public:
     std::vector<std::pair<int, int>> standardMapping;
     /// Cliff tiles and their rules (empty if the profile has no "cliffs" section).
     CliffData cliffs;
+    /// Map generator stamps and seam pairs (empty if no "generator" section).
+    GeneratorData generator;
 
     /// Index of the ground with this id (case-sensitive), or -1.
     int findGround(const std::string& id) const;
@@ -80,6 +119,9 @@ public:
     bool blends(int x, int y) const { return hasTransitions(x, y) || hasTransitions(y, x); }
 
 private:
+    /// Reads the optional "generator" section into `generator` (profile.cpp).
+    static void parseGenerator(Profile& p, const json::Value& g);
+
     std::unordered_map<uint64_t, int> tileIndex_;            // (tileset << 32 | image) -> tile index
     std::vector<std::array<std::vector<int>, 16>> byPair_;   // [a * groundCount + b]
     std::array<std::vector<int>, 16> empty_{};               // returned for out-of-range pairs

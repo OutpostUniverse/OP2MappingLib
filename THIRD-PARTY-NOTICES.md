@@ -2,9 +2,11 @@
 
 ## op2-codegen-editor
 
-op2maplib's terrain blending rules, its cliff tool (`src/cliff.cpp`) and the
-Outpost 2 tile model that `tools/export_op2_profile.py` turns into
-`profiles/op2.json` are ported from or derived from op2-codegen-editor:
+op2maplib's terrain blending rules, its cliff tool (`src/cliff.cpp`), its map
+generator (`src/mapgen/`, ported from `mapview/mapgen*.py` and
+`mapview/shapegen.py`) and the Outpost 2 tile model that
+`tools/export_op2_profile.py` turns into `profiles/op2.json` are ported from or
+derived from op2-codegen-editor:
 https://github.com/fefi-byte/op2-codegen-editor
 
 It is distributed under the MIT License:

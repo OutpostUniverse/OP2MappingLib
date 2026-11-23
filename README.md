@@ -30,6 +30,14 @@ Modules:
 
   Moved here from OP2Mapper's Find & Fix Enclosed Areas, and checked to give
   identical results on all 63 maps in OPU's `base/maps`.
+- **Map generator.** Generates a whole map from a seed: biome layout (six
+  templates, terrain mix, roughness, symmetry for 2 or 4 players), relief
+  (plateaus with ramps; valley, mountain, plateau, clearing and choke
+  features; the New Terra landscape mode with a highland massif, mesas and dry
+  riverbeds), volcanoes with lava-possible zones, scattered rocks and craters,
+  and spawn points. Grounds come from the blend engine and cliffs from the
+  cliff tool, so a generated map follows the same tile rules as painting.
+  Ported from op2-codegen-editor's generator.
 
 ## Layout
 
@@ -37,12 +45,14 @@ Modules:
 |---|---|
 | `include/op2maplib/op2maplib.h` | The C API, the only public header. |
 | `src/` | Implementation: blend engine, profile loader, small JSON reader. |
+| `src/mapgen/` | Map generator: biome field, shapes, relief and features, spawn points, the pipeline and its C API. |
 | `profiles/op2.json` | Outpost 2 blend profile (standard `well0000`–`well0012` tilesets). |
 | `docs/profile-format.md` | Profile format, and how the solver uses it. |
 | `tools/export_op2_profile.py` | Generates `profiles/op2.json` from op2-codegen-editor's learned tile model. |
 | `bindings/python/` | Python binding (ctypes) and its tests. |
 | `bindings/dotnet/` | .NET binding (`Op2MapLib.Net`, P/Invoke, .NET Framework 4.8; usable from C# and VB.NET), prebuilt native DLLs in `native/x86` and `native/x64`, and its tests. |
 | `tools/build-native.ps1` | Builds and tests the 32-bit and 64-bit DLLs and refreshes `bindings/dotnet/native/`. |
+| `tools/compile-check.bat` | Compiles single source files with MSVC (`/W4 /WX`, no linking), for quick checks while editing. |
 | `tests/` | C++ tests, and shared test vectors every binding must reproduce. |
 | `THIRD-PARTY-NOTICES.md` | Licence of the op2-codegen-editor code this library is ported from. |
 
@@ -64,6 +74,7 @@ Python tests, run from the repository root after building:
 ```
 python -I bindings/python/tests/test_blend.py
 python -I bindings/python/tests/test_cliffs.py
+python -I bindings/python/tests/test_mapgen.py
 python -I bindings/python/tests/test_regions.py "path/to/Outpost 2/OPU/base/maps"
 ```
 
@@ -136,6 +147,30 @@ om_regions_enclosed_cells(r, xy, enclosed);               /* their (x, y) pairs 
 om_regions_free(r);
 ```
 
+The map generator returns a whole map:
+
+```c
+om_mapgen_settings* s = om_mapgen_settings_create("islands");    /* plains, canyon, desert, islands, ice, newterra */
+om_mapgen_set(s, "width", 128);
+om_mapgen_set(s, "height", 128);
+om_mapgen_set(s, "spawns", 2);
+om_mapgen_set(s, "cliffs", 0.2);
+om_mapgen_set_seed(s, 1234);
+om_mapgen_add_feature(s, OM_FEATURE_MOUNTAIN, "c", "", 0.6, 0);
+om_mapgen_result* r = om_mapgen_generate(profile, s, err, sizeof err);
+om_mapgen_get_tiles(r, tiles, 128 * 128);          /* mapping indices into the standard mapping table */
+om_mapgen_get_cell_types(r, cell_types, 128 * 128);
+int spawns = om_mapgen_get_points(r, OM_MAPGEN_SPAWNS, xy, 8);
+om_mapgen_result_free(r);
+om_mapgen_settings_free(s);
+```
+
+The tiles index the profile's standard mapping table
+(`om_profile_standard_mapping`), which the new map uses as its own. The result
+also lists volcanoes, lava-possible zones (for the mission), placed features
+and statistics. In Python: `MapGenerator("islands", seed=1234, spawns=2).generate(profile)`;
+in .NET: `new MapGenSettings("islands").Generate(profile)`.
+
 ## How cliffs work
 
 A port of op2-codegen-editor's cliff tool (`src/cliff.cpp`):
@@ -172,17 +207,62 @@ re-resolving doesn't reshuffle the map. Details are in `docs/profile-format.md`.
 The approach and the Outpost 2 tile data come from op2-codegen-editor's terrain
 brush, which learned them from the campaign maps.
 
+## How the map generator works
+
+A port of op2-codegen-editor's generator (`mapview/mapgen*.py`,
+`shapegen.py`), in `src/mapgen/`:
+
+1. **Layout.** A value-noise field picks a ground per cell from the terrain
+   mix; roughness sets the noise frequency. Then symmetry, majority smoothing,
+   small patches dissolved into their surroundings, and vegetation kept away
+   from rock and sand (there are no transitions between them).
+2. **Relief.** Features are placed first (sectors of a 3x3 grid, jittered),
+   then the height field: mountains and plateaus as irregular blobs, valleys
+   as corridors, chokes as a barrier with one gap, extra blobs from the cliffs
+   setting, clearings punched out, edges snapped to a 3-cell grid. New Terra
+   builds one massif at a map side, mesas and meandering dry riverbeds.
+3. **Tiles.** The biome field is painted into a blend map and resolved, so
+   borders get the game's transition tiles. A ground with no fill tiles in the
+   profile (snow) becomes rock, as in the editor.
+4. **Volcanoes**, then **cliffs**: each highland area's boundary is traced,
+   split into arcs with ramp gaps (the largest area gets the ramps setting,
+   every mesa one), simplified and drawn with the cliff tool.
+5. **Seam pass.** In reading order, each fill and transition tile is re-picked
+   among tiles of the same kind so it fits its left and upper neighbour (a
+   pair seen in the original maps). This stands in for the editor's tile
+   sampler, which drew every tile from the learned neighbour table.
+6. **Scatter** (rocks, cracks, craters) as whole stamps on matching ground,
+   only where their borders fit; then **spawn points** on free, far-apart,
+   connected ground.
+
+Differences from the editor's generator:
+- Same seed, different map: the library has its own random numbers and its
+  own tile layer.
+- Symmetry: the editor copies the finished tile grid onto the mirrored half,
+  which turns that half's cliff walls the wrong way. Here the biome and height
+  fields are symmetric and both halves get their own tiles and cliffs; only the
+  scatter is placed mirrored.
+- Measured on the six templates at 128x128 (seed 1234), neighbour pairs never
+  seen in the original maps: 0.2–4.3% here against 2.9–19.4% for the editor
+  (`bindings/python/tests/test_mapgen.py` prints them). Ground shares and
+  passability are close to the editor's.
+- Speed: 20–30 ms for a map without cliffs (editor: about 2 s). Cliffs cost
+  about 50 ms per wall, so a canyon with many plateaus takes a few seconds
+  (editor: about 8 s).
+
 ## Status
 
-- Version 0.3.0. Blending works for mud, rock and sand (and lava/rock).
+- Version 0.3.2. Blending works for mud, rock and sand (and lava/rock).
   Cliffs work for mud and sand, and every other ground uses mud cliffs.
-  Passable regions (enclosed areas) work for any map.
+  Passable regions (enclosed areas) work for any map. The map generator
+  covers everything the editor's generator does.
 - The DLLs carry version details (company Outpost Universe). The .NET binding
   looks for the profile at `op2maplib\op2.json` next to it, and still accepts
   the older `op2maplib\profiles\op2.json`.
 - The C++ tests (32-bit and 64-bit), the Python tests and the .NET tests (32-bit
   and 64-bit) all pass and reproduce the same golden hashes
-  (`tests/vectors/blend_disc.json`, `tests/vectors/cliff_l.json`).
+  (`tests/vectors/blend_disc.json`, `tests/vectors/cliff_l.json`,
+  `tests/vectors/mapgen_islands.json`).
 - Cliff quality, from `bindings/python/tests/test_cliffs.py`: 240 test walls
   (straight, sloped, L/U shapes, loops; all sides; heights 3–6).
   - Every wall was solved without the greedy fallback, with no holes and no
@@ -196,7 +276,11 @@ brush, which learned them from the campaign maps.
   tiles whose corner data is ambiguous, and fallback picks where no exact tile
   exists.
 - Next steps:
-  - blending: prefer tiles whose edges match already-chosen neighbours;
+  - blending: prefer tiles whose edges match already-chosen neighbours (the
+    generator's seam pass does this; the blend engine itself does not yet);
+  - generator: snow and lava cannot be generated (no fill tiles in the
+    profile); quad-symmetry spawns can land close to the centre lines, as in
+    the editor;
   - cliffs: close cuts cleanly when a cliff is painted over (ramps);
   - cliffs: a mud rim around cliffs on grounds that use the fallback;
   - cliffs: measure the wall height from nearby cliffs;

@@ -130,6 +130,39 @@ internal static class Program
                 }
             }
 
+            // Map generator: the shared golden map (tests/vectors/mapgen_islands.json).
+            using (var gen = new MapGenSettings("islands"))
+            {
+                gen.Set("width", 64);
+                gen.Set("height", 64);
+                gen.Set("cliffs", 0.25);
+                gen.Set("spawns", 2);
+                gen.Seed = 1234;
+                gen.AddFeature(MapFeature.Mountain, "c", "", 0.6, false);
+                GeneratedMap map = gen.Generate(profile);
+                Check(map.Width == 64 && map.Height == 64 && map.Tiles.Length == 64 * 64, "mapgen: size");
+                Check(map.Spawns.Length == 2 && map.Connected, "mapgen: two connected spawns");
+                Check(map.CellTypes.Any(c => c == 8 || c == 9 || c == 10), "mapgen: cliffs drawn");
+                string hash = Fnv1a64(map.Tiles.Select(t => (int)t));
+                Console.WriteLine("mapgen golden hash: " + hash);
+                Check(hash == "6c45f417758ec9c7", "mapgen golden hash matches C++ and Python");
+                try
+                {
+                    gen.Set("width", 8);
+                    gen.Generate(profile);
+                    Check(false, "too small map throws");
+                }
+                catch (Op2MapLibException e)
+                {
+                    Check(e.Message.Contains("size"), "mapgen error mentions the size");
+                }
+            }
+            using (var gen = new MapGenSettings("newterra"))
+            {
+                GeneratedMap map = gen.Generate(profile);
+                Check(map.Volcanoes.Length == 1 && map.LavaZones.Length >= 1 && map.RiverShare > 0, "mapgen: newterra volcano and rivers");
+            }
+
             // Native errors surface as Op2MapLibException carrying the library's message.
             try
             {

@@ -1,0 +1,9 @@
+{
+  "description": "Map generator golden map: template 'islands', 64x64, seed 1234, cliffs 0.25, 2 spawns, one mountain feature (kind 1) at sector 'c' with size 0.6, all other settings default. Hash the tile grid (standard mapping index per cell, row by row) with FNV-1a 64 over each value's 4 little-endian bytes.",
+  "profile": "profiles/op2.json",
+  "template": "islands",
+  "settings": {"width": 64, "height": 64, "cliffs": 0.25, "spawns": 2},
+  "seed": 1234,
+  "features": [{"kind": 1, "where": "c", "to": "", "size": 0.6, "lava": false}],
+  "fnv1a64": "6c45f417758ec9c7"
+}

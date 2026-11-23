@@ -710,6 +710,227 @@ namespace Op2MapLib
         }
     }
 
+    /// <summary>Symmetry modes of the map generator (om_mapgen_symmetry).</summary>
+    public enum MapSymmetry
+    {
+        /// <summary>No symmetry.</summary>
+        None = 0,
+        /// <summary>Left half mirrored onto the right (2 players).</summary>
+        MirrorX = 1,
+        /// <summary>Top half mirrored onto the bottom (2 players).</summary>
+        MirrorY = 2,
+        /// <summary>Point-symmetric (2 players).</summary>
+        Rot180 = 3,
+        /// <summary>Four-fold mirrored (4 players).</summary>
+        Quad = 4,
+    }
+
+    /// <summary>Terrain features the map generator can place (om_mapgen_feature).</summary>
+    public enum MapFeature
+    {
+        /// <summary>A valley between two walls, optionally with a lava-possible floor.</summary>
+        Valley = 0,
+        /// <summary>A rugged highland blob.</summary>
+        Mountain = 1,
+        /// <summary>A flatter, rounder highland to build on.</summary>
+        Plateau = 2,
+        /// <summary>An area kept free of cliffs, volcanoes and scatter.</summary>
+        Clearing = 3,
+        /// <summary>A barrier across the map with one gap.</summary>
+        Choke = 4,
+    }
+
+    /// <summary>
+    /// Settings for generating a whole map (om_mapgen_settings_*). Start from a
+    /// template, change settings, add features, then call <see cref="Generate"/>.
+    /// </summary>
+    /// <remarks>
+    /// <code>
+    /// using (var gen = new MapGenSettings("islands"))
+    /// {
+    ///     gen.Set("width", 128); gen.Set("height", 128); gen.Set("spawns", 2);
+    ///     gen.Seed = 1234;
+    ///     gen.AddFeature(MapFeature.Mountain, "c", "", 0.6, false);
+    ///     GeneratedMap map = gen.Generate(profile);
+    /// }
+    /// </code>
+    /// The result's tiles are mapping indices into the profile's standard mapping
+    /// table (<see cref="BlendProfile.StandardMapping"/>), which a new map should
+    /// use as its own. Same profile, settings and seed give the same map.
+    /// </remarks>
+    public sealed class MapGenSettings : IDisposable
+    {
+        private IntPtr _handle;
+        private ulong _seed = 1;
+
+        /// <summary>Creates settings from a template: plains, canyon, desert, islands, ice or newterra (unknown = plains).</summary>
+        /// <param name="template">Template name; null or "" = plains.</param>
+        /// <exception cref="Op2MapLibException">The native library could not create the settings.</exception>
+        public MapGenSettings(string template = "plains")
+        {
+            _handle = Native.om_mapgen_settings_create(template ?? "");
+            if (_handle == IntPtr.Zero) throw new Op2MapLibException("Could not create map generator settings.");
+        }
+
+        /// <summary>
+        /// Sets a numeric setting: width, height, roughness, symmetry (<see cref="MapSymmetry"/>),
+        /// spawns, spawn_clearance, cliffs, ramps, volcanoes, lava_zone_tiles, smooth,
+        /// vegetation_spacing, min_biome, details, landscape, rivers. See op2maplib.h for meanings and defaults.
+        /// </summary>
+        /// <exception cref="ArgumentException">Unknown key or invalid value.</exception>
+        public void Set(string key, double value)
+        {
+            if (Native.om_mapgen_set(Live, key, value) != 0) throw new ArgumentException("Unknown map generator setting or bad value: " + key, nameof(key));
+        }
+
+        /// <summary>Current value of a numeric setting (0 for an unknown key).</summary>
+        public double Get(string key) => Native.om_mapgen_get(Live, key);
+
+        /// <summary>The random seed (default 1).</summary>
+        public ulong Seed
+        {
+            get => _seed;
+            set { Native.om_mapgen_set_seed(Live, value); _seed = value; }
+        }
+
+        /// <summary>Replaces the terrain mix: ground id ("mud", "roc", "san", "veg", "sno") to share.</summary>
+        /// <exception cref="ArgumentException">A share is negative or an id is empty.</exception>
+        public void SetMix(IDictionary<string, double> mix)
+        {
+            if (mix == null) throw new ArgumentNullException(nameof(mix));
+            Native.om_mapgen_clear_mix(Live);
+            foreach (var kv in mix)
+                if (Native.om_mapgen_set_mix(Live, kv.Key, kv.Value) != 0) throw new ArgumentException("Bad mix entry " + kv.Key, nameof(mix));
+        }
+
+        /// <summary>
+        /// Adds a terrain feature. where/to are sectors of a 3x3 grid: "nw", "n", "no",
+        /// "w", "c", "o", "sw", "s", "so" (o = east); "" = the seed decides (to: opposite of where).
+        /// </summary>
+        public void AddFeature(MapFeature kind, string where = "", string to = "", double size = 0.5, bool lava = false)
+        {
+            if (Native.om_mapgen_add_feature(Live, (int)kind, where ?? "", to ?? "", size, lava ? 1 : 0) != 0)
+                throw new ArgumentException("Bad feature kind", nameof(kind));
+        }
+
+        /// <summary>Removes all features.</summary>
+        public void ClearFeatures() => Native.om_mapgen_clear_features(Live);
+
+        /// <summary>Generates the map.</summary>
+        /// <exception cref="Op2MapLibException">The settings were rejected (for example a bad map size); the message says why.</exception>
+        public GeneratedMap Generate(BlendProfile profile)
+        {
+            if (profile == null) throw new ArgumentNullException(nameof(profile));
+            var err = new StringBuilder(512);
+            IntPtr r = Native.om_mapgen_generate(profile.Live, Live, err, (UIntPtr)err.Capacity);
+            if (r == IntPtr.Zero) throw new Op2MapLibException("Could not generate the map: " + err);
+            try { return new GeneratedMap(r, profile.GroundCount); }
+            finally { Native.om_mapgen_result_free(r); }
+        }
+
+        private IntPtr Live
+        {
+            get
+            {
+                if (_handle == IntPtr.Zero) throw new ObjectDisposedException(nameof(MapGenSettings));
+                return _handle;
+            }
+        }
+
+        /// <summary>Frees the native settings. Calling Dispose more than once is harmless.</summary>
+        public void Dispose()
+        {
+            if (_handle != IntPtr.Zero)
+            {
+                Native.om_mapgen_settings_free(_handle);
+                _handle = IntPtr.Zero;
+            }
+            GC.SuppressFinalize(this);
+        }
+
+        /// <summary>Frees the native settings if <see cref="Dispose"/> was not called.</summary>
+        ~MapGenSettings()
+        {
+            if (_handle != IntPtr.Zero) Native.om_mapgen_settings_free(_handle);
+        }
+    }
+
+    /// <summary>A generated map, copied out of the native result (no handle to dispose).</summary>
+    public sealed class GeneratedMap
+    {
+        /// <summary>Map width in cells.</summary>
+        public int Width { get; }
+        /// <summary>Map height in cells.</summary>
+        public int Height { get; }
+        /// <summary>Mapping index per cell (standard mapping table), row by row.</summary>
+        public ushort[] Tiles { get; }
+        /// <summary>Outpost 2 cell type per cell, row by row.</summary>
+        public byte[] CellTypes { get; }
+        /// <summary>Spawn points.</summary>
+        public System.Drawing.Point[] Spawns { get; }
+        /// <summary>Volcano centres.</summary>
+        public System.Drawing.Point[] Volcanoes { get; }
+        /// <summary>Lava-possible cells, one list per volcano or lava valley.</summary>
+        public System.Drawing.Point[][] LavaZones { get; }
+        /// <summary>Share of passable cells.</summary>
+        public double PassableShare { get; }
+        /// <summary>Share of cliff cells.</summary>
+        public double PlateauShare { get; }
+        /// <summary>Share covered by scattered rocks and craters.</summary>
+        public double DetailShare { get; }
+        /// <summary>Share of dry riverbed (landscape mode).</summary>
+        public double RiverShare { get; }
+        /// <summary>True if all spawn points reach each other over passable cells.</summary>
+        public bool Connected { get; }
+        /// <summary>Share of the map per profile ground.</summary>
+        public double[] GroundShares { get; }
+        /// <summary>Per <see cref="MapFeature"/>: cliff cells it produced (clearings: how many were placed).</summary>
+        public int[] FeatureReport { get; }
+        /// <summary>Features as placed: kind, centre/start and size (radius or width).</summary>
+        public (MapFeature Kind, int X, int Y, int Size)[] Features { get; }
+
+        internal GeneratedMap(IntPtr r, int groundCount)
+        {
+            Width = Native.om_mapgen_width(r);
+            Height = Native.om_mapgen_height(r);
+            int n = Width * Height;
+            Tiles = new ushort[n];
+            CellTypes = new byte[n];
+            Native.om_mapgen_get_tiles(r, Tiles, n);
+            Native.om_mapgen_get_cell_types(r, CellTypes, n);
+            Spawns = Points(Native.om_mapgen_point_count(r, 0), (b, c) => Native.om_mapgen_get_points(r, 0, b, c));
+            Volcanoes = Points(Native.om_mapgen_point_count(r, 1), (b, c) => Native.om_mapgen_get_points(r, 1, b, c));
+            LavaZones = new System.Drawing.Point[Native.om_mapgen_lava_zone_count(r)][];
+            for (int z = 0; z < LavaZones.Length; z++)
+                LavaZones[z] = Points(Native.om_mapgen_lava_zone_size(r, z), (b, c) => Native.om_mapgen_lava_zone_cells(r, z, b, c));
+            PassableShare = Native.om_mapgen_stat(r, "passable");
+            PlateauShare = Native.om_mapgen_stat(r, "plateau");
+            DetailShare = Native.om_mapgen_stat(r, "details");
+            RiverShare = Native.om_mapgen_stat(r, "rivers");
+            Connected = Native.om_mapgen_stat(r, "connected") != 0;
+            GroundShares = new double[groundCount];
+            for (int g = 0; g < groundCount; g++) GroundShares[g] = Native.om_mapgen_ground_share(r, g);
+            FeatureReport = new int[5];
+            for (int k = 0; k < 5; k++) FeatureReport[k] = Native.om_mapgen_feature_report(r, k);
+            Features = new (MapFeature, int, int, int)[Native.om_mapgen_feature_count(r)];
+            for (int i = 0; i < Features.Length; i++)
+            {
+                Native.om_mapgen_feature(r, i, out int kind, out int x, out int y, out int size);
+                Features[i] = ((MapFeature)kind, x, y, size);
+            }
+        }
+
+        // Copies a native (x, y) pair list into points.
+        private static System.Drawing.Point[] Points(int n, Func<int[], int, int> fill)
+        {
+            var buf = new int[Math.Max(1, n) * 2];
+            int got = n > 0 ? fill(buf, n) : 0;
+            var result = new System.Drawing.Point[got];
+            for (int i = 0; i < got; i++) result[i] = new System.Drawing.Point(buf[2 * i], buf[2 * i + 1]);
+            return result;
+        }
+    }
+
     /// <summary>Raw P/Invoke declarations and native library loading.</summary>
     /// <remarks>
     /// Signatures mirror include/op2maplib/op2maplib.h one to one (cdecl). Handles
@@ -844,5 +1065,44 @@ namespace Op2MapLib
         [DllImport(Lib, CallingConvention = CC)] internal static extern int om_regions_at(IntPtr r, int x, int y);
         [DllImport(Lib, CallingConvention = CC)] internal static extern int om_regions_enclosed_size(IntPtr r);
         [DllImport(Lib, CallingConvention = CC)] internal static extern int om_regions_enclosed_cells(IntPtr r, [Out] int[] xy, int max);
+
+        // --- Map generator ---------------------------------------------------
+        // om_mapgen_settings_create returns a handle to free with
+        // om_mapgen_settings_free; om_mapgen_generate one to free with
+        // om_mapgen_result_free. Keys and ids are ASCII strings.
+        [DllImport(Lib, CallingConvention = CC, CharSet = CharSet.Ansi)]
+        internal static extern IntPtr om_mapgen_settings_create([MarshalAs(UnmanagedType.LPStr)] string template);
+        [DllImport(Lib, CallingConvention = CC)] internal static extern void om_mapgen_settings_free(IntPtr s);
+        [DllImport(Lib, CallingConvention = CC, CharSet = CharSet.Ansi)]
+        internal static extern int om_mapgen_set(IntPtr s, [MarshalAs(UnmanagedType.LPStr)] string key, double value);
+        [DllImport(Lib, CallingConvention = CC, CharSet = CharSet.Ansi)]
+        internal static extern double om_mapgen_get(IntPtr s, [MarshalAs(UnmanagedType.LPStr)] string key);
+        [DllImport(Lib, CallingConvention = CC)] internal static extern void om_mapgen_set_seed(IntPtr s, ulong seed);
+        [DllImport(Lib, CallingConvention = CC)] internal static extern void om_mapgen_clear_mix(IntPtr s);
+        [DllImport(Lib, CallingConvention = CC, CharSet = CharSet.Ansi)]
+        internal static extern int om_mapgen_set_mix(IntPtr s, [MarshalAs(UnmanagedType.LPStr)] string ground, double share);
+        [DllImport(Lib, CallingConvention = CC)] internal static extern void om_mapgen_clear_features(IntPtr s);
+        [DllImport(Lib, CallingConvention = CC, CharSet = CharSet.Ansi)]
+        internal static extern int om_mapgen_add_feature(IntPtr s, int kind, [MarshalAs(UnmanagedType.LPStr)] string where,
+            [MarshalAs(UnmanagedType.LPStr)] string to, double size, int lava);
+        [DllImport(Lib, CallingConvention = CC, CharSet = CharSet.Ansi)]
+        internal static extern IntPtr om_mapgen_generate(IntPtr profile, IntPtr settings, StringBuilder err, UIntPtr errSize);
+        [DllImport(Lib, CallingConvention = CC)] internal static extern void om_mapgen_result_free(IntPtr r);
+        [DllImport(Lib, CallingConvention = CC)] internal static extern int om_mapgen_width(IntPtr r);
+        [DllImport(Lib, CallingConvention = CC)] internal static extern int om_mapgen_height(IntPtr r);
+        [DllImport(Lib, CallingConvention = CC)] internal static extern int om_mapgen_get_tiles(IntPtr r, [Out] ushort[] output, int max);
+        [DllImport(Lib, CallingConvention = CC)] internal static extern int om_mapgen_get_cell_types(IntPtr r, [Out] byte[] output, int max);
+        [DllImport(Lib, CallingConvention = CC)] internal static extern int om_mapgen_point_count(IntPtr r, int list);
+        [DllImport(Lib, CallingConvention = CC)] internal static extern int om_mapgen_get_points(IntPtr r, int list, [Out] int[] xy, int max);
+        [DllImport(Lib, CallingConvention = CC)] internal static extern int om_mapgen_lava_zone_count(IntPtr r);
+        [DllImport(Lib, CallingConvention = CC)] internal static extern int om_mapgen_lava_zone_size(IntPtr r, int zone);
+        [DllImport(Lib, CallingConvention = CC)] internal static extern int om_mapgen_lava_zone_cells(IntPtr r, int zone, [Out] int[] xy, int max);
+        [DllImport(Lib, CallingConvention = CC, CharSet = CharSet.Ansi)]
+        internal static extern double om_mapgen_stat(IntPtr r, [MarshalAs(UnmanagedType.LPStr)] string key);
+        [DllImport(Lib, CallingConvention = CC)] internal static extern double om_mapgen_ground_share(IntPtr r, int ground);
+        [DllImport(Lib, CallingConvention = CC)] internal static extern int om_mapgen_feature_count(IntPtr r);
+        [DllImport(Lib, CallingConvention = CC)]
+        internal static extern int om_mapgen_feature(IntPtr r, int index, out int kind, out int x, out int y, out int size);
+        [DllImport(Lib, CallingConvention = CC)] internal static extern int om_mapgen_feature_report(IntPtr r, int kind);
     }
 }
