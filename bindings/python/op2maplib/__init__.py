@@ -265,6 +265,7 @@ class Profile:
                 message includes the library's reason.
         """
         data = json_text.encode("utf-8") if isinstance(json_text, str) else json_text
+        self._free = _lib.om_profile_free   # see close()
         err = ctypes.create_string_buffer(512)   # the library writes its error message here
         self._h = _lib.om_profile_load(data, len(data), err, len(err))
         if not self._h:
@@ -286,8 +287,10 @@ class Profile:
         Close any BlendMap made from this profile first.
         """
         # getattr: __init__ may have raised before _h was set.
+        # self._free, not _lib: at interpreter shutdown the module's globals
+        # may already be None when __del__ runs; the bound function stays.
         if getattr(self, "_h", None):
-            _lib.om_profile_free(self._h)
+            self._free(self._h)
             self._h = None
 
     def __del__(self):
@@ -404,6 +407,7 @@ class BlendMap:
         if len(cells) != width * height:
             raise ValueError("cells must hold width*height entries")
         self._profile = profile   # keeps the native profile alive (it must outlive the map)
+        self._free = _lib.om_blend_free   # see Profile.close()
         self.width, self.height = width, height
         # The C structs point into these bytes objects; keep them for the call.
         self._names = [str(ts).encode() for ts, _ in mappings]
@@ -418,7 +422,7 @@ class BlendMap:
         """Frees the native blend map. Safe to call more than once."""
         # getattr: __init__ may have raised before _h was set.
         if getattr(self, "_h", None):
-            _lib.om_blend_free(self._h)
+            self._free(self._h)
             self._h = None
 
     def __del__(self):
@@ -580,6 +584,7 @@ class Regions:
 
     def __init__(self, handle, width: int, height: int):
         """Wraps a native om_regions handle; use Regions.find() instead."""
+        self._free = _lib.om_regions_free   # see Profile.close()
         self._h = handle
         self.width, self.height = width, height
 
@@ -635,7 +640,7 @@ class Regions:
     def close(self) -> None:
         """Frees the native regions object. Safe to call more than once."""
         if getattr(self, "_h", None):
-            _lib.om_regions_free(self._h)
+            self._free(self._h)
             self._h = None
 
     def __del__(self):
