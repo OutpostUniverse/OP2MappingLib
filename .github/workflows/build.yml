@@ -1,0 +1,165 @@
+# Builds op2maplib from source and runs every test on each push and pull
+# request; on a version tag (v*) it also publishes the Windows DLLs as a
+# release with SHA-256 checksums and build provenance.
+#
+# Windows (x64, x86): CMake build, C++ tests, Python tests, .NET tests. The
+#   .NET tests run against the DLL built here (copied over the committed one
+#   in the runner's checkout only).
+# Linux, macOS: CMake build, C++ tests, Python tests.
+#
+# Every job reproduces the same golden hashes (tests/vectors/), so this also
+# checks that results are identical across platforms and architectures.
+# test_regions.py needs the game's maps and is not run here.
+#
+# Each Windows DLL is uploaded as an artifact together with its SHA-256 sum,
+# and (outside pull requests) gets a GitHub build-provenance attestation, so
+# anyone can check a DLL with:
+#   gh attestation verify op2maplib.dll --repo OutpostUniverse/OP2MappingLib
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    name: Windows ${{ matrix.arch }}
+    runs-on: windows-latest
+    permissions:
+      contents: read
+      id-token: write       # build-provenance attestation
+      attestations: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            cmake_arch: x64
+            python_arch: x64
+          - arch: x86
+            cmake_arch: Win32
+            python_arch: x86
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: |
+          cmake -S . -B build -A ${{ matrix.cmake_arch }}
+          cmake --build build --config Release
+
+      - name: C++ tests
+        run: build\bin\Release\op2maplib_tests.exe profiles\op2.json
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          architecture: ${{ matrix.python_arch }}
+
+      - name: Python tests
+        env:
+          OP2MAPLIB_PATH: ${{ github.workspace }}\build\bin\Release\op2maplib.dll
+        run: |
+          python -I bindings/python/tests/test_blend.py
+          python -I bindings/python/tests/test_cliffs.py
+          python -I bindings/python/tests/test_mapgen.py
+
+      - uses: microsoft/setup-msbuild@v2
+
+      - name: .NET tests (against the DLL built above)
+        run: |
+          Copy-Item build\bin\Release\op2maplib.dll bindings\dotnet\native\${{ matrix.arch }}\op2maplib.dll -Force
+          msbuild bindings\dotnet\tests\Op2MapLib.Net.Tests.csproj /p:Configuration=Release /p:TestArch=${{ matrix.arch }} /nologo /v:minimal
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          bindings\dotnet\tests\bin\${{ matrix.arch }}\Op2MapLib.Net.Tests.exe
+
+      - name: Checksum
+        id: sum
+        run: |
+          New-Item -ItemType Directory out | Out-Null
+          Copy-Item build\bin\Release\op2maplib.dll out\op2maplib.dll
+          $h = (Get-FileHash out\op2maplib.dll -Algorithm SHA256).Hash.ToLower()
+          "$h  op2maplib.dll" | Set-Content -Encoding ascii out\op2maplib.dll.sha256
+          "SHA-256 ($env:ARCH): $h" | Tee-Object -Append -FilePath $env:GITHUB_STEP_SUMMARY
+        env:
+          ARCH: ${{ matrix.arch }}
+
+      - name: Attest build provenance
+        if: github.event_name != 'pull_request'
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: out/op2maplib.dll
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: op2maplib-windows-${{ matrix.arch }}
+          path: out/
+          if-no-files-found: error
+
+  unix:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --parallel
+
+      - name: C++ tests
+        run: build/bin/op2maplib_tests profiles/op2.json
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Python tests
+        run: |
+          python -I bindings/python/tests/test_blend.py
+          python -I bindings/python/tests/test_cliffs.py
+          python -I bindings/python/tests/test_mapgen.py
+
+  release:
+    name: Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows, unix]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Package
+        run: |
+          mkdir dist
+          for arch in x64 x86; do
+            d=op2maplib-${GITHUB_REF_NAME}-windows-$arch
+            mkdir "$d"
+            cp artifacts/op2maplib-windows-$arch/op2maplib.dll "$d/"
+            cp profiles/op2.json LICENSE THIRD-PARTY-NOTICES.md "$d/"
+            (cd "$d" && sha256sum op2maplib.dll op2.json > SHA256SUMS.txt)
+            zip -r "dist/$d.zip" "$d"
+          done
+          (cd dist && sha256sum *.zip > SHA256SUMS.txt)
+          cat dist/SHA256SUMS.txt
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* --title "op2maplib $GITHUB_REF_NAME" \
+            --notes "Windows DLLs built from this tag by GitHub Actions. SHA256SUMS.txt lists the checksums; each DLL also has a build-provenance attestation (gh attestation verify op2maplib.dll --repo $GITHUB_REPOSITORY)."

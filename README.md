@@ -54,6 +54,8 @@ Modules:
 | `tools/build-native.ps1` | Builds and tests the 32-bit and 64-bit DLLs and refreshes `bindings/dotnet/native/`. |
 | `tools/compile-check.bat` | Compiles single source files with MSVC (`/W4 /WX`, no linking), for quick checks while editing. |
 | `tests/` | C++ tests, and shared test vectors every binding must reproduce. |
+| `.github/workflows/build.yml` | CI: build and test on Windows (x64, x86), Linux and macOS; checksums, attestations and releases. |
+| `LICENSE` | MIT licence of this library. |
 | `THIRD-PARTY-NOTICES.md` | Licence of the op2-codegen-editor code this library is ported from. |
 
 ## Building
@@ -101,6 +103,25 @@ bindings\dotnet\tests\bin\x64\Op2MapLib.Net.Tests.exe
 OP2Mapper uses the prebuilt binding: `Op2MapLib.Net.dll` as a plain reference,
 with `x86\op2maplib.dll`, `x64\op2maplib.dll` and `op2maplib\op2.json` shipped
 next to `OP2Mapper.exe`.
+
+## Continuous integration and verified DLLs
+
+`.github/workflows/build.yml` builds the library from source on every push and
+pull request and runs all tests: Windows x64 and x86 (C++, Python, .NET),
+Linux and macOS (C++, Python). Every job must reproduce the same golden hashes.
+
+Each Windows build is kept as an artifact with its SHA-256 sum, and builds
+outside pull requests get a GitHub build-provenance attestation. A version tag
+(`v*`) publishes a release with both DLLs, the profile and `SHA256SUMS.txt`.
+To check that a DLL was built by this repository's workflow:
+
+```
+gh attestation verify op2maplib.dll --repo OutpostUniverse/OP2MappingLib
+```
+
+The DLLs committed in `bindings/dotnet/native/` are built locally with
+`tools/build-native.ps1`; use a release (or build from source) when you need a
+verifiable binary.
 
 ## Using it
 
@@ -312,6 +333,11 @@ Differences from the editor's generator:
 
 ## Credits
 
-The terrain blending rules, the cliff tool and the Outpost 2 tile model are
-ported from [op2-codegen-editor](https://github.com/fefi-byte/op2-codegen-editor)
-by fefi-byte, used under the MIT License. See `THIRD-PARTY-NOTICES.md`.
+The terrain blending rules, the cliff tool, the map generator and the Outpost 2
+tile model are ported from
+[op2-codegen-editor](https://github.com/fefi-byte/op2-codegen-editor) by
+fefi-byte, used under the MIT License. See `THIRD-PARTY-NOTICES.md`.
+
+## License
+
+MIT, the same as op2-codegen-editor. See `LICENSE`.
