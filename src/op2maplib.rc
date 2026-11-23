@@ -24,7 +24,7 @@ BEGIN
         BLOCK "040904b0"
         BEGIN
             VALUE "CompanyName",      "Outpost Universe"
-            VALUE "FileDescription",  "op2maplib - Outpost 2 map-editing algorithms"
+            VALUE "FileDescription",  "OP2MappingLib - Outpost 2 map-editing algorithms"
             VALUE "FileVersion",      OM_VERSION_DOTTED
             VALUE "InternalName",     "op2maplib"
             VALUE "LegalCopyright",   "Copyright (C) Outpost Universe"
