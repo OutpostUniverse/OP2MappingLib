@@ -1,11 +1,13 @@
 # OP2MappingLib
 
+[![Build](https://github.com/OutpostUniverse/OP2MappingLib/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/OutpostUniverse/OP2MappingLib/actions/workflows/build.yml)
+
 Shared functions for Outpost 2 map making.
 
 OP2MappingLib holds **op2maplib**, a library of reusable map-editing
 algorithms for Outpost 2 map tools. It is used by
 [OP2Mapper](https://github.com/leviathan400/OP2Mapper) for its Terrain Brush,
-Draw Cliff and Find & Fix Enclosed Areas tools. The core is C++17
+Draw Cliff, Find & Fix Enclosed Areas and Generate New Map tools. The core is C++17
 with no dependencies, behind a plain C API, so any editor can use it: C/C++
 directly, .NET via P/Invoke, Python via ctypes, Rust, Delphi, WebAssembly.
 
