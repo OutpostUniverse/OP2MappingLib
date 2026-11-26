@@ -47,8 +47,18 @@ Modules:
   riverbeds), volcanoes with lava-possible zones, scattered rocks and craters,
   and spawn points. Grounds come from the blend engine and cliffs from the
   cliff tool, so a generated map follows the same tile rules as painting.
+  Mountains with tight terraces, gorges, valleys and plateaus are told apart
+  by whether you can build there, and are planned on a larger world so their
+  walls run off the map edge as in the original maps (classic cliffs can do
+  the same with `world_cutout`).
   The generator was designed and written by fefi-byte for op2-codegen-editor;
   this is a C++ port of it.
+- **Learned map generator.** Maps in the style of the original maps: two
+  small neural networks trained on 61 Outpost 2 maps sketch walls and grounds,
+  then paint the map tile by tile using only tile pairs seen in the originals.
+  They run on the library's own inference code (no dependencies, the same map
+  on every platform and for any thread count); the networks ship as
+  `profiles/op2-net.bin`. See [docs/learned-generator.md](docs/learned-generator.md).
 
 ## Layout
 
@@ -56,10 +66,13 @@ Modules:
 |---|---|
 | `include/op2maplib/op2maplib.h` | The C API, the only public header. |
 | `src/` | Implementation: blend engine, profile loader, small JSON reader. |
-| `src/mapgen/` | Map generator: biome field, shapes, relief and features, spawn points, the pipeline and its C API. |
+| `src/mapgen/` | Map generator: biome field, shapes, relief and features, mountains, spawn points, the pipeline and its C API; the learned generator and its network code (`net.cpp`, `learned_*.cpp`). |
 | `profiles/op2.json` | Outpost 2 blend profile (standard `well0000`–`well0012` tilesets). |
+| `profiles/op2-net.bin` | The learned generator's networks and tile tables. |
+| `docs/learned-generator.md` | The learned generator: how it works, using it, measurements, file format. |
 | `docs/profile-format.md` | Profile format, and how the solver uses it. |
 | `tools/export_op2_profile.py` | Generates `profiles/op2.json` from op2-codegen-editor's learned tile model. |
+| `tools/export_learned_model.py` | Generates `profiles/op2-net.bin` from op2-codegen-editor's networks. |
 | `bindings/python/` | Python binding (ctypes) and its tests. |
 | `bindings/dotnet/` | .NET binding (`Op2MapLib.Net`, P/Invoke, .NET Framework 4.8; usable from C# and VB.NET), prebuilt native DLLs in `native/x86` and `native/x64`, and its tests. |
 | `tools/build-native.ps1` | Builds and tests the 32-bit and 64-bit DLLs and refreshes `bindings/dotnet/native/`. |
@@ -203,6 +216,18 @@ also lists volcanoes, lava-possible zones (for the mission), placed features
 and statistics. In Python: `MapGenerator("islands", seed=1234, spawns=2).generate(profile)`;
 in .NET: `new MapGenSettings("islands").Generate(profile)`.
 
+Mountains, gorges, valleys and plateaus are settings of the same generator
+(`mountains`, `mountain_density`, `gorges`, `valleys`, `plateaus`). The learned
+generator takes the same settings plus the network file:
+
+```c
+om_mapgen_model* model = om_mapgen_model_load(net, net_len, err, sizeof err);   /* profiles/op2-net.bin */
+om_mapgen_settings* s = om_mapgen_settings_create("learned");
+om_mapgen_set(s, "width", 128);
+om_mapgen_set(s, "height", 128);
+om_mapgen_result* r = om_mapgen_generate_learned(profile, model, s, OM_LEARNED_FAST, 0, NULL, NULL, err, sizeof err);
+```
+
 ## How cliffs work
 
 A port of op2-codegen-editor's cliff tool (`src/cliff.cpp`):
@@ -262,11 +287,18 @@ tile layer for this library's engines:
 4. **Volcanoes**, then **cliffs**: each highland area's boundary is traced,
    split into arcs with ramp gaps (the largest area gets the ramps setting,
    every mesa one), simplified and drawn with the cliff tool.
-5. **Seam pass.** In reading order, each fill and transition tile is re-picked
+5. **Mountains** (`mountains.cpp`, from the editor's `mapgen_berge.py`), if
+   asked for: chains of warped ellipses with ridges on a world 32 cells larger
+   than the map, valleys and gorges cut where they cross the most mountain,
+   inner terraces as tight as `mountain_density` allows, plateaus apart from
+   them; the ground under the walls is made mud before the tiles are painted.
+   Each terrace and plateau is enclosed with the cliff tool, the best of
+   several attempts winning (outer walls closed, plateaus with two ramps).
+6. **Seam pass.** In reading order, each fill and transition tile is re-picked
    among tiles of the same kind so it fits its left and upper neighbour (a
    pair seen in the original maps). This stands in for the editor's tile
    sampler, which drew every tile from the learned neighbour table.
-6. **Scatter** (rocks, cracks, craters) as whole stamps on matching ground,
+7. **Scatter** (rocks, cracks, craters) as whole stamps on matching ground,
    only where their borders fit; then **spawn points** on free, far-apart,
    connected ground.
 
@@ -290,14 +322,16 @@ Differences from the editor's generator:
 - Version 0.3.4. Blending works for mud, rock and sand (and lava/rock).
   Cliffs work for mud and sand, and every other ground uses mud cliffs.
   Passable regions (enclosed areas) work for any map. The map generator
-  covers everything the editor's generator does.
+  covers everything the editor's generator does, including mountains and the
+  learned generator of op2-codegen-editor 0.11.1.
 - The DLLs carry version details (company Outpost Universe). The .NET binding
   looks for the profile at `op2maplib\op2.json` next to it, and still accepts
   the older `op2maplib\profiles\op2.json`.
 - The C++ tests (32-bit and 64-bit), the Python tests and the .NET tests (32-bit
   and 64-bit) all pass and reproduce the same golden hashes
   (`tests/vectors/blend_disc.json`, `tests/vectors/cliff_l.json`,
-  `tests/vectors/mapgen_islands.json`).
+  `tests/vectors/mapgen_islands.json`, `mapgen_mountains.json`,
+  `mapgen_learned.json`).
 - Cliff quality, from `bindings/python/tests/test_cliffs.py`: 240 test walls
   (straight, sloped, L/U shapes, loops; all sides; heights 3–6).
   - Every wall was solved without the greedy fallback, with no holes and no
@@ -316,6 +350,13 @@ Differences from the editor's generator:
   - generator: snow and lava cannot be generated (no fill tiles in the
     profile); quad-symmetry spawns can land close to the centre lines, as in
     the editor;
+  - mountains: with north-south symmetry (mirror Y, rot180) a mountain wall
+    or a plateau ramp occasionally comes out closed or open where it should
+    not (about 1 map in 8 at 128x128; the editor does the same, a little less
+    often);
+  - learned generator: about 1.5-2x slower than the editor with ONNX Runtime
+    (no fused multiply-add, see docs/learned-generator.md); the editor's newer
+    sliders (calmer biomes, coherence, gradient, lava rock) are not ported yet;
   - cliffs: close cuts cleanly when a cliff is painted over (ramps);
   - cliffs: a mud rim around cliffs on grounds that use the fallback;
   - cliffs: measure the wall height from nearby cliffs;
@@ -356,6 +397,10 @@ work much of this library is ported from (MIT License, see
   templates, relief, valley/mountain/plateau/clearing/choke features, the New
   Terra landscape mode, volcanoes and lava zones, scatter, spawn points — and
   the measurements behind its defaults.
+- **Mountains and the learned generator** (`src/mapgen/mountains.cpp`,
+  `learned_*.cpp`, `net.cpp`, `profiles/op2-net.bin`): the zones, the two
+  networks and their training on the original maps, the sketch and painting
+  pipeline, and its C++ port with its own inference code.
 - **Cliff tool** (`src/cliff.cpp`): the band-and-solver approach and its rules.
 - **Terrain blending**: the corner rule for transition tiles.
 - **Outpost 2 tile model**: everything `profiles/op2.json` is exported from,

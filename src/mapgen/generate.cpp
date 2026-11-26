@@ -12,6 +12,7 @@
 //
 // Ported from fefi-byte's op2-codegen-editor (MIT, see THIRD-PARTY-NOTICES.md).
 #include "generate.hpp"
+#include "canvas.hpp"
 
 #include "../blend.hpp"
 
@@ -25,45 +26,12 @@ namespace om::gen {
 
 namespace {
 
-constexpr int kMediumPassable1 = 4;   // celltypes.MEDIUM_PASSIBLE_1: fallback cell type
 constexpr int kNorthCliffs = 8, kCliffsHighSide = 9, kCliffsLowSide = 10;
 constexpr double kWallHeight = 3.0;   // HOEHE_MIN/HOEHE_MAX 1.5/2.5 = a 3-cell wall (dicke_aus_hoehe)
 
 bool isCliff(int ct) { return ct == kNorthCliffs || ct == kCliffsHighSide || ct == kCliffsLowSide; }
 
-/// The generator's view of the map: tiles as standard mapping indices, cell
-/// types, and the BlendMap that picks ground tiles.
-struct Canvas {
-    const Profile& profile;
-    int w, h;
-    Grid<int32_t> tiles;          ///< standard mapping index per cell
-    Grid<int32_t> cells;          ///< cell type per cell
-    std::vector<int> cellOfMapping;              ///< standard mapping -> cell type (-1 unknown)
-    std::vector<uint32_t> packedOfMapping;       ///< standard mapping -> tileset * 4096 + image
-    std::unordered_map<uint32_t, int> mappingOfPacked;
-
-    Canvas(const Profile& p, int width, int height)
-        : profile(p), w(width), h(height), tiles(width, height, 0), cells(width, height, kMediumPassable1) {
-        const auto& sm = p.standardMapping;
-        cellOfMapping.assign(sm.size(), -1);
-        packedOfMapping.resize(sm.size());
-        for (size_t m = 0; m < sm.size(); ++m) {
-            const int t = p.findTile(sm[m].first, sm[m].second);
-            if (t >= 0) cellOfMapping[m] = p.tiles[t].cellType;
-            const uint32_t k = GeneratorData::pack(sm[m].first, sm[m].second);
-            packedOfMapping[m] = k;
-            mappingOfPacked.emplace(k, static_cast<int>(m));   // first wins
-        }
-    }
-
-    /// Writes one tile with a known cell type (-1: the table's, else the fallback).
-    void put(int x, int y, int mapping, int cellType) {
-        tiles.at(x, y) = mapping;
-        if (cellType < 0 && mapping >= 0 && mapping < static_cast<int>(cellOfMapping.size()))
-            cellType = cellOfMapping[mapping];
-        cells.at(x, y) = cellType >= 0 ? cellType : kMediumPassable1;
-    }
-};
+}  // namespace
 
 /// Standard mapping index of a stamp tile, or -1 if the table lacks it.
 int stampMapping(const Canvas& c, const StampTile& t) {
@@ -160,6 +128,15 @@ int scatterDetails(Canvas& c, BlendMap& bm, const Field& fam, Rng& rng, int targ
     }
     return placed;
 }
+
+std::vector<om_mapping> standardTable(const Profile& profile) {
+    std::vector<om_mapping> table(profile.standardMapping.size());
+    for (size_t m = 0; m < table.size(); ++m)
+        table[m] = {profile.tilesets[profile.standardMapping[m].first].c_str(), profile.standardMapping[m].second};
+    return table;
+}
+
+namespace {
 
 /// _stamp_volcanoes: the largest volcano stamp (the smallest if it does not
 /// fit) centred on each site. Returns the placed centres.

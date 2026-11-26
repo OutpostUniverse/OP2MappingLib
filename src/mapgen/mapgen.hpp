@@ -118,6 +118,8 @@ struct Params {
     int valleys = 1;                ///< taeler: wide cuts with building ground
     int plateaus = 0;               ///< hochebenen: one-terrace areas with building ground and ramps
     bool mountainSpread = false;    ///< grossform: more, more varied mountains spread over the whole world
+    bool learnedRocks = true;       ///< berg_felsen, learned generator only: rocks and craters where the
+                                    ///< walls alone leave building ground in mountains and gorges
     bool worldCutout = false;       ///< classic cliffs: plan a larger world and take the middle,
                                     ///< so cliffs run off the map edge as in the original maps
 };

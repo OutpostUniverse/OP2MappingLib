@@ -52,6 +52,7 @@ Field field(Params& p, const char* key) {
     if (k == "plateaus") return {nullptr, &p.plateaus};
     if (k == "mountain_spread") return {nullptr, nullptr, &p.mountainSpread};
     if (k == "world_cutout") return {nullptr, nullptr, &p.worldCutout};
+    if (k == "learned_rocks") return {nullptr, nullptr, &p.learnedRocks};
     return {};
 }
 

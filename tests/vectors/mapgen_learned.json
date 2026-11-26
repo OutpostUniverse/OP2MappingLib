@@ -1,0 +1,14 @@
+{
+  "description": "Learned map generator golden map: template 'learned', 64x64, seed 3, 2 spawns, quality 1 (fast), any thread count. Hash the tile grid (standard mapping index per cell, row by row) with FNV-1a 64 over each value's 4 little-endian bytes.",
+  "profile": "profiles/op2.json",
+  "model": "profiles/op2-net.bin",
+  "template": "learned",
+  "settings": {
+    "width": 64,
+    "height": 64,
+    "spawns": 2
+  },
+  "seed": 3,
+  "quality": 1,
+  "fnv1a64": "05a14ace030553ef"
+}

@@ -455,6 +455,55 @@ int main(int argc, char** argv) {
         std::printf("  golden map hash: %s, %d cliff cells\n", hex, cliffCells);
         CHECK(std::string(hex) == "6c45f417758ec9c7");
 
+        // Mountains, gorges, valleys and plateaus (tests/vectors/mapgen_mountains.json):
+        // closed mountains, reachable plateaus, same seed = same map.
+        {
+            om_mapgen_settings* ms = om_mapgen_settings_create("plains");
+            om_mapgen_set(ms, "width", 64);
+            om_mapgen_set(ms, "height", 64);
+            om_mapgen_set(ms, "mountains", 0.14);
+            om_mapgen_set(ms, "plateaus", 1);
+            om_mapgen_set(ms, "spawns", 2);
+            om_mapgen_set_seed(ms, 7);
+            om_mapgen_result* r = om_mapgen_generate(p, ms, err, sizeof err);
+            CHECK(r != nullptr);
+            if (r) {
+                std::vector<uint16_t> t(64 * 64);
+                om_mapgen_get_tiles(r, t.data(), 64 * 64);
+                std::snprintf(hex, sizeof hex, "%016llx",
+                              static_cast<unsigned long long>(hashGrid(std::vector<int>(t.begin(), t.end()))));
+                std::printf("  mountains: %d (leaky %d), plateaus %d (unreachable %d), build in mountains %.3f, hash %s\n",
+                            int(om_mapgen_stat(r, "mountains")), int(om_mapgen_stat(r, "mountains_leaky")),
+                            int(om_mapgen_stat(r, "plateaus")), int(om_mapgen_stat(r, "plateaus_unreachable")),
+                            om_mapgen_stat(r, "build_mountain"), hex);
+                CHECK(om_mapgen_stat(r, "mountains") >= 1 && om_mapgen_stat(r, "mountains_leaky") == 0);
+                CHECK(om_mapgen_stat(r, "plateaus") == 1 && om_mapgen_stat(r, "plateaus_unreachable") == 0);
+                CHECK(om_mapgen_stat(r, "build_mountain") < 0.1);
+                CHECK(std::string(hex) == "683ac10cc3dfc740");
+            }
+            om_mapgen_result_free(r);
+            // Classic cliffs as a world cutout cross the map edge.
+            om_mapgen_settings* ws = om_mapgen_settings_create("plains");
+            om_mapgen_set(ws, "width", 64);
+            om_mapgen_set(ws, "height", 64);
+            om_mapgen_set(ws, "cliffs", 0.2);
+            om_mapgen_set(ws, "world_cutout", 1);
+            om_mapgen_set_seed(ws, 7);
+            r = om_mapgen_generate(p, ws, err, sizeof err);
+            CHECK(r != nullptr && om_mapgen_width(r) == 64);
+            if (r) {
+                std::vector<uint8_t> c(64 * 64);
+                om_mapgen_get_cell_types(r, c.data(), 64 * 64);
+                int edge = 0;
+                for (int i = 0; i < 64; ++i)
+                    for (int k : {i, 63 * 64 + i, i * 64, i * 64 + 63}) edge += c[size_t(k)] >= 8 && c[size_t(k)] <= 10;
+                CHECK(edge > 0);
+            }
+            om_mapgen_result_free(r);
+            om_mapgen_settings_free(ws);
+            om_mapgen_settings_free(ms);
+        }
+
         // Settings API.
         om_mapgen_settings* s = om_mapgen_settings_create(nullptr);
         CHECK(om_mapgen_set(s, "no_such_key", 1) == -1);
@@ -465,6 +514,68 @@ int main(int argc, char** argv) {
         CHECK(om_mapgen_generate(p, s, err, sizeof err) == nullptr && err[0] != '\0');
         om_mapgen_settings_free(s);
         CHECK(om_mapgen_generate(nullptr, nullptr, err, sizeof err) == nullptr);
+    }
+
+    // --- Learned map generator ----------------------------------------------
+    std::printf("learned generator\n");
+    {
+        // The network file sits next to the profile (profiles/op2-net.bin).
+        std::string netPath = argv[1];
+        const size_t slash = netPath.find_last_of("/\\");
+        netPath = (slash == std::string::npos ? std::string() : netPath.substr(0, slash + 1)) + "op2-net.bin";
+        const std::string net = readFile(netPath.c_str());
+        om_mapgen_model* m = om_mapgen_model_load(net.data(), net.size(), err, sizeof err);
+        CHECK(m != nullptr);
+        CHECK(om_mapgen_model_load("nope", 4, err, sizeof err) == nullptr && err[0] != '\0');
+        om_mapgen_settings* s = om_mapgen_settings_create("learned");
+        om_mapgen_set(s, "width", 64);
+        om_mapgen_set(s, "height", 64);
+        om_mapgen_set(s, "spawns", 2);
+        om_mapgen_set_seed(s, 3);
+        // Golden map (tests/vectors/mapgen_learned.json), the same for any thread count.
+        std::string hashes[2];
+        for (int i = 0; i < 2 && m; ++i) {
+            om_mapgen_result* r = om_mapgen_generate_learned(p, m, s, OM_LEARNED_FAST, i == 0 ? 1 : 3, nullptr, nullptr,
+                                                             err, sizeof err);
+            CHECK(r != nullptr);
+            if (!r) continue;
+            std::vector<uint16_t> t(64 * 64);
+            om_mapgen_get_tiles(r, t.data(), 64 * 64);
+            char hx[17];
+            std::snprintf(hx, sizeof hx, "%016llx",
+                          static_cast<unsigned long long>(hashGrid(std::vector<int>(t.begin(), t.end()))));
+            hashes[i] = hx;
+            CHECK(om_mapgen_stat(r, "connected") == 1.0 && om_mapgen_point_count(r, OM_MAPGEN_SPAWNS) == 2);
+            int32_t sw = 0, sh = 0;
+            CHECK(om_mapgen_sketch_size(r, &sw, &sh) == 32 * 32 && sw == 32 && sh == 32);
+            if (i == 0)
+                std::printf("  passable %.3f, plateau %.3f, build %.3f, hash %s\n", om_mapgen_stat(r, "passable"),
+                            om_mapgen_stat(r, "plateau"), om_mapgen_stat(r, "build"), hx);
+            om_mapgen_result_free(r);
+        }
+        CHECK(hashes[0] == hashes[1]);
+        CHECK(hashes[0] == "05a14ace030553ef");
+        // Sketch only: no tiles, a sketch with walls.
+        om_mapgen_result* r = om_mapgen_generate_learned(p, m, s, OM_LEARNED_SKETCH, 0, nullptr, nullptr, err, sizeof err);
+        CHECK(r != nullptr && om_mapgen_width(r) == 0);
+        if (r) {
+            std::vector<uint8_t> walls(32 * 32), grounds(32 * 32);
+            CHECK(om_mapgen_get_sketch(r, walls.data(), grounds.data(), 32 * 32) == 32 * 32);
+            int any = 0;
+            for (uint8_t w : walls) any += w > 0 && w <= 8;
+            CHECK(any > 0);
+        }
+        om_mapgen_result_free(r);
+        // Cancel from the progress callback.
+        auto stop = [](double, void*) -> int { return 1; };
+        CHECK(om_mapgen_generate_learned(p, m, s, OM_LEARNED_FAST, 0, stop, nullptr, err, sizeof err) == nullptr);
+        CHECK(std::string(err) == "cancelled");
+        // Sizes must be multiples of 8.
+        om_mapgen_set(s, "width", 60);
+        CHECK(om_mapgen_generate_learned(p, m, s, OM_LEARNED_FAST, 0, nullptr, nullptr, err, sizeof err) == nullptr);
+        CHECK(om_mapgen_generate_learned(p, nullptr, s, OM_LEARNED_FAST, 0, nullptr, nullptr, err, sizeof err) == nullptr);
+        om_mapgen_settings_free(s);
+        om_mapgen_model_free(m);
     }
 
     // --- Null safety ---------------------------------------------------------

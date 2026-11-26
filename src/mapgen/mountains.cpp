@@ -458,8 +458,9 @@ void planPlateaus(MountainPlan& plan, const Params& p, Rng& rng, const Mask& fre
     }
 }
 
-/// BergPlan.ausschneiden: the map's cutout of the world plan.
-MountainPlan cutOut(const MountainPlan& world, int w, int h) {
+}  // namespace
+
+MountainPlan cutOutPlan(const MountainPlan& world, int w, int h) {
     const int R = kWorldMargin;
     MountainPlan out;
     for (const Mask& m : world.terraces) {
@@ -485,8 +486,6 @@ MountainPlan cutOut(const MountainPlan& world, int w, int h) {
     return out;
 }
 
-}  // namespace
-
 Mask MountainPlan::all(int w, int h) const {
     Mask m(w, h, 0);
     if (!terraces.empty()) orWith(m, terraces[0]);
@@ -503,6 +502,10 @@ Mask MountainPlan::seam(int w, int h) const {
 }
 
 MountainPlan planMountains(const Params& p, const Mask& blocked) {
+    return cutOutPlan(planWorld(p, blocked), p.width, p.height);
+}
+
+MountainPlan planWorld(const Params& p, const Mask& blocked) {
     MountainPlan plan;
     if (!mountainsWanted(p)) return plan;
     const int R = kWorldMargin, h = p.height + 2 * R, w = p.width + 2 * R;
@@ -513,7 +516,7 @@ MountainPlan planMountains(const Params& p, const Mask& blocked) {
     freeCells = mirrored(freeCells, p.symmetry);
     if (p.mountains > 0) planRanges(plan, p, rng, freeCells);
     planPlateaus(plan, p, rng, freeCells);
-    return cutOut(plan, p.width, p.height);
+    return plan;
 }
 
 // ---------------------------------------------------------------------------

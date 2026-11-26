@@ -52,6 +52,10 @@ inline bool mountainsWanted(const Params& p) { return p.mountains > 0 || p.plate
 /// berg_plan: shapes of all zones of the map. `blocked`: map-sized mask of
 /// cells that stay free (volcanoes, clearings).
 MountainPlan planMountains(const Params& p, const Mask& blocked);
+/// welt_plan: the same on the larger world (kWorldMargin more on every side).
+MountainPlan planWorld(const Params& p, const Mask& blocked);
+/// BergPlan.ausschneiden: the map's cutout of a world plan.
+MountainPlan cutOutPlan(const MountainPlan& world, int w, int h);
 
 /// Tiles the walls are drawn into: mapping indices into the profile's
 /// standard table plus the cell types the generator keeps.

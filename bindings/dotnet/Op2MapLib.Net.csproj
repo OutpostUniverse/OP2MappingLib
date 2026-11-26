@@ -7,6 +7,7 @@
   Projects that reference this one also receive, in their output folder:
     x86\op2maplib.dll, x64\op2maplib.dll   native library, loaded by bitness
     op2maplib\op2.json                      the Outpost 2 blend profile
+    op2maplib\op2-net.bin                   the learned map generator's networks
   The native DLLs come from native\ (refresh them with tools\build-native.ps1).
 -->
 <Project ToolsVersion="15.0" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
@@ -70,6 +71,10 @@
     </Content>
     <Content Include="..\..\profiles\op2.json">
       <Link>op2maplib\op2.json</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="..\..\profiles\op2-net.bin">
+      <Link>op2maplib\op2-net.bin</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
   </ItemGroup>

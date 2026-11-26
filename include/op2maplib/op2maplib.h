@@ -372,9 +372,11 @@ typedef enum om_mapgen_points {
 
 /**
  * Creates settings from a template: "plains", "canyon", "desert", "islands",
- * "ice" or "newterra" (NULL, "" or an unknown name = "plains"). The template
- * sets the terrain mix, roughness, landscape mode and volcanoes; everything
- * else starts at its default. Free with om_mapgen_settings_free.
+ * "ice", "newterra" or "learned" (NULL, "" or an unknown name = "plains").
+ * The template sets the terrain mix, roughness, landscape mode and volcanoes
+ * ("learned": suggestions for om_mapgen_generate_learned, with mountains,
+ * plateaus and cliffs); everything else starts at its default. Free with
+ * om_mapgen_settings_free.
  */
 OM_API om_mapgen_settings* OM_CALL om_mapgen_settings_create(const char* template_name);
 OM_API void OM_CALL om_mapgen_settings_free(om_mapgen_settings* settings);
@@ -393,6 +395,21 @@ OM_API void OM_CALL om_mapgen_settings_free(om_mapgen_settings* settings);
  *   details (0.5)           scatter density; 0.5 is about the original maps
  *   landscape (template)    1 = New Terra relief mode
  *   rivers (-1)             dry riverbeds in landscape mode, -1 = by map size
+ *   mountains (0)           share of the map in mountain chains (0 = none): tight
+ *                           terraces, no building ground, closed outer wall
+ *   mountain_density (0.8)  how tight the terraces stand, 1 = as tight as walls allow
+ *   gorges (1), valleys (1) narrow passable cuts / wide cuts with building ground
+ *                           through the mountains
+ *   plateaus (0)            one-terrace areas with building ground and two ramps
+ *   mountain_spread (0)     1 = more, more varied mountains over the whole map
+ *   world_cutout (0)        1 = classic cliffs are planned on a larger world and
+ *                           cut out, so they cross the map edge (only without
+ *                           volcanoes, features, landscape mode and mountains;
+ *                           mountains always do this)
+ *   learned_rocks (1)       learned generator: rocks and craters where walls alone
+ *                           leave building ground in mountains and gorges
+ * Mountains and plateaus are planned on a world 32 cells larger on every side
+ * and cut out, so their walls run off the map edge as in the original maps.
  * The seed has its own setter (64 bits do not fit a double exactly).
  */
 OM_API int OM_CALL om_mapgen_set(om_mapgen_settings* settings, const char* key, double value);
@@ -454,7 +471,12 @@ OM_API int OM_CALL om_mapgen_lava_zone_cells(const om_mapgen_result* result, int
 /**
  * Statistics: "passable" (share of passable cells), "plateau" (share of cliff
  * cells), "details" (share covered by scatter), "rivers" (share of riverbed),
- * "connected" (1 if all spawns reach each other). 0 for an unknown key.
+ * "connected" (1 if all spawns reach each other). With mountains or plateaus
+ * also: "mountains", "mountains_leaky" (outer wall not closed), "plateaus",
+ * "plateaus_unreachable", "build" (share of the map that is building ground:
+ * covered by a free, reachable 7x7 square), "build_mountain", "build_plateau",
+ * "build_valley", "build_gorge" (building ground share per zone, -1 if the map
+ * has no such zone), "gorges", "gorges_passable". 0 for an unknown key.
  */
 OM_API double OM_CALL om_mapgen_stat(const om_mapgen_result* result, const char* key);
 /** Share of the map covered by a profile ground (by the ground of its tiles). */
@@ -467,6 +489,63 @@ OM_API int OM_CALL om_mapgen_get_feature(const om_mapgen_result* result, int ind
                                      int32_t* kind, int32_t* x, int32_t* y, int32_t* size);
 /** Per feature kind: cliff cells it produced (clearings: how many were placed). */
 OM_API int OM_CALL om_mapgen_feature_report(const om_mapgen_result* result, int kind);
+
+/* ------------------------------------------------------------------------ */
+/* Learned map generator                                                     */
+/*                                                                           */
+/* Maps in the style of the original maps, from two small neural networks    */
+/* trained on 61 maps (originals and OPU): a sketch network lays out walls   */
+/* and grounds on a half-resolution grid, guided by zones (mountains and     */
+/* gorges: no building ground; plateaus and valleys: building ground), and a */
+/* tile network paints the map tile by tile, using only tile pairs that      */
+/* occur in the training maps. The networks run on this library's own        */
+/* inference code (CPU, no dependencies), the same on every platform and for */
+/* any thread count. The network file for the Outpost 2 profile ships as     */
+/* profiles/op2-net.bin. Uses the same settings as om_mapgen_generate         */
+/* (template "learned" for suggestions); features, volcanoes, landscape mode  */
+/* and roughness are not used. Width and height must be multiples of 8.      */
+
+/** The learned generator's networks and tile tables (profiles/op2-net.bin). */
+typedef struct om_mapgen_model om_mapgen_model;
+
+/** Quality levels of om_mapgen_generate_learned. */
+typedef enum om_learned_quality {
+    OM_LEARNED_SKETCH = 0,   /* only the sketch (about a second): om_mapgen_get_sketch */
+    OM_LEARNED_FAST   = 1,   /* 6 painting rounds */
+    OM_LEARNED_GOOD   = 2    /* 24 painting rounds, fewer odd spots, about 1.5x slower */
+} om_learned_quality;
+
+/**
+ * Progress callback: fraction 0..1 of the painting (0 while sketching).
+ * Return 0 to go on, nonzero to cancel (the call then fails with "cancelled").
+ */
+typedef int (OM_CALL *om_progress_fn)(double fraction, void* user);
+
+/** Loads a network file from memory (copied). Returns NULL with a message in err on bad data. */
+OM_API om_mapgen_model* OM_CALL om_mapgen_model_load(const void* data, size_t len, char* err, size_t err_size);
+OM_API void OM_CALL om_mapgen_model_free(om_mapgen_model* model);
+
+/**
+ * Generates a map with the learned generator. threads: 0 = automatic (half the
+ * cores, at most 8); the map does not depend on it. progress may be NULL. A
+ * sketch-only result (OM_LEARNED_SKETCH) has no tiles (width and height 0).
+ * The result works with all om_mapgen_* result functions, including the zone
+ * statistics. Returns NULL with a message in err on failure or cancel.
+ * Same profile, model, settings and seed give the same map.
+ */
+OM_API om_mapgen_result* OM_CALL om_mapgen_generate_learned(const om_profile* profile, const om_mapgen_model* model,
+                                                            const om_mapgen_settings* settings, int quality, int threads,
+                                                            om_progress_fn progress, void* user, char* err,
+                                                            size_t err_size);
+/** Size of the result's sketch (half the map size; 0 x 0 for other results). Returns width * height. */
+OM_API int OM_CALL om_mapgen_sketch_size(const om_mapgen_result* result, int32_t* width, int32_t* height);
+/**
+ * Copies up to max sketch cells, row by row: walls 0 = none, 1..8 = the
+ * direction the wall falls towards (E, SE, S, SW, W, NW, N, NE); grounds 0 mud,
+ * 1 rock, 2 sand, 3 vegetation, 4 other. Either buffer may be NULL. Returns the
+ * number copied.
+ */
+OM_API int OM_CALL om_mapgen_get_sketch(const om_mapgen_result* result, uint8_t* walls, uint8_t* grounds, int32_t max);
 
 #ifdef __cplusplus
 }

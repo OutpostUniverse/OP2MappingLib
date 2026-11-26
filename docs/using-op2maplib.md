@@ -270,6 +270,38 @@ clearing (kept free of cliffs and scatter), choke (a barrier with one gap).
 Positions are sectors of a 3×3 grid — `nw n no / w c o / sw s so` (German
 compass, `o` = east); leave them empty to let the seed decide.
 
+**Mountains** are settings too: `mountains` (share of the map in mountain
+chains, 0 = none), `mountain_density` (how tight the terraces stand, 1 = as
+tight as the walls allow), `gorges` and `valleys` (cuts through the
+mountains: a gorge is narrow and passable but no building ground, a valley is
+building ground), `plateaus` (one-terrace areas with two ramps) and
+`mountain_spread` (more, more varied mountains). They are planned on a world 32
+cells larger than the map, so walls run off the edge; `world_cutout` does the
+same for classic cliffs. The result's statistics say how it went:
+`mountains_leaky`, `plateaus_unreachable`, and the share of building ground
+(a free, reachable 7×7 square) on the map and per zone: `build`,
+`build_mountain`, `build_plateau`, `build_valley`, `build_gorge`.
+
+```python
+m = MapGenerator("plains", width=128, height=128, seed=7, mountains=0.14, plateaus=2, spawns=2).generate(profile)
+m.stats["mountains_leaky"], m.stats["build_mountain"]   # 0, about 0.01
+```
+
+**The learned generator** makes maps in the style of the original maps from
+two small neural networks (`profiles/op2-net.bin`). It takes the same settings
+object (template `learned` for suggestions) and a loaded model:
+
+```python
+model = LearnedModel.from_file("profiles/op2-net.bin")
+gen = MapGenerator("learned", width=128, height=128, seed=7, spawns=2)
+preview = gen.generate_learned(profile, model, LearnedQuality.SKETCH)   # about a second, sketch only
+result = gen.generate_learned(profile, model, LearnedQuality.FAST, progress=lambda f: True)
+```
+
+In C: `om_mapgen_model_load`, `om_mapgen_generate_learned`, `om_mapgen_get_sketch`;
+in .NET: `LearnedModel.LoadDefault()`, `MapGenSettings.GenerateLearned`. A
+128×128 map takes 6–10 s. Details in [learned-generator.md](learned-generator.md).
+
 **Writing the result into a map:**
 
 1. Use the profile's standard mapping table as the new map's tile mapping table
@@ -355,8 +387,13 @@ include), so a green Windows build alone is not enough.
 - **No unordered iteration in output paths.** Iterating an `unordered_map`
   gives a different order per standard library; sort first or use vectors.
 - **No exceptions across the C boundary.** Every exported function catches.
+- **No fused multiply-add, own `exp`/`log`/`erf` in the learned generator.**
+  The build sets `-ffp-contract=off`; the network code (`src/mapgen/net.cpp`)
+  keeps its vector paths doing exactly the operations of its scalar code. See
+  [learned-generator.md](learned-generator.md#same-map-everywhere).
 - **Golden hashes** pin the exact output: `tests/vectors/blend_disc.json`,
-  `cliff_l.json` and `mapgen_islands.json`, checked by the C++, Python and .NET
+  `cliff_l.json`, `mapgen_islands.json`, `mapgen_mountains.json` and
+  `mapgen_learned.json`, checked by the C++, Python and .NET
   tests on every platform. When you change output *on purpose*, run the tests,
   take the new hash from the failure message, and update it in the vector file
   (the Python tests read it from there), in `tests/blend_tests.cpp` and in
@@ -386,6 +423,13 @@ python -I tools/export_op2_profile.py <op2-codegen-editor>/mapview <a campaign .
 The export is deterministic; check that only what you meant to change differs
 (the script prints a summary). The format is documented in
 [profile-format.md](profile-format.md).
+
+`profiles/op2-net.bin`, the learned generator's networks, is exported from the
+files op2-codegen-editor ships (needs `numpy` and `onnx`):
+
+```
+python tools/export_learned_model.py <op2-codegen-editor>/mapview profiles/op2.json profiles/op2-net.bin
+```
 
 ### Releasing
 

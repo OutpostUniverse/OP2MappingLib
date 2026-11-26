@@ -28,6 +28,7 @@ struct Result {
     std::array<int, 5> featureReport{};        ///< per FeatKind: cliff cells (clearings: count)
     std::vector<FeatureSpot> featureSpots;
     MountainReport zones;                      ///< mountains only: walls and building ground per zone
+    Grid<int32_t> sketchWall, sketchGround;    ///< learned generator: its sketch (half resolution)
 };
 
 /// Generates a map (same profile, params and seed = same map). Throws
