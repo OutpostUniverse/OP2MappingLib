@@ -35,6 +35,7 @@ set(OP2MAPLIB_SOURCES
     src/mapgen/api_mapgen.cpp
     src/mapgen/field.cpp
     src/mapgen/generate.cpp
+    src/mapgen/mountains.cpp
     src/mapgen/paths.cpp
     src/mapgen/relief.cpp
     src/mapgen/shape.cpp

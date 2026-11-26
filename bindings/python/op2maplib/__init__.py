@@ -728,6 +728,14 @@ class FeatureKind:
     CHOKE = 4       # a barrier across the map with one gap
 
 
+# Keys of om_mapgen_stat. The mountain keys are 0 (counts) or -1 (shares of a
+# zone the map does not have) without mountains.
+_MAPGEN_STATS = ("passable", "plateau", "details", "rivers", "connected",
+                 "mountains", "mountains_leaky", "plateaus", "plateaus_unreachable",
+                 "build", "build_mountain", "build_plateau", "build_valley", "build_gorge",
+                 "gorges", "gorges_passable")
+
+
 class MapGenerator:
     """Settings for generating a map (om_mapgen_settings_*).
 
@@ -851,7 +859,7 @@ class GeneratedMap:
         zones = [pts(_lib.om_mapgen_lava_zone_size(h, z), lambda b, c, z=z: _lib.om_mapgen_lava_zone_cells(h, z, b, c))
                  for z in range(_lib.om_mapgen_lava_zone_count(h))]
         stats = {k: _lib.om_mapgen_stat(h, k.encode())
-                 for k in ("passable", "plateau", "details", "rivers", "connected")}
+                 for k in _MAPGEN_STATS}
         shares = [_lib.om_mapgen_ground_share(h, g) for g in range(ground_count)]
         feats = []
         for i in range(_lib.om_mapgen_feature_count(h)):

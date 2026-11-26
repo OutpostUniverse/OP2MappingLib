@@ -299,12 +299,10 @@ void seamPass(Canvas& c, BlendMap& bm, Rng& rng) {
 
 }  // namespace
 
-Result generate(const Profile& profile, const Params& in) {
+namespace {
+
+Result generateMap(const Profile& profile, const Params& in) {
     Params p = in;
-    if (p.width < 16 || p.height < 16 || p.width > 1024 || p.height > 1024)
-        throw std::runtime_error("map size must be 16..1024 cells per side");
-    if (profile.standardMapping.empty())
-        throw std::runtime_error("the profile has no standard mapping table");
     const int w = p.width, h = p.height;
 
     std::vector<std::string> ids;
@@ -336,16 +334,34 @@ Result generate(const Profile& profile, const Params& in) {
     // --- features first: the volcano search must know the clearings
     const std::vector<Placement> layout = featureLayout(p, rng);
     std::vector<Point> sites = volcanoSites(fam, p, rng, rock);
-    {
-        Mask clear(w, h, 0);
-        for (const Placement& e : layout)
-            if (e.feat.kind == FeatKind::Clearing) {
-                const Mask m = featureMask(e, w, h);
-                for (size_t i = 0; i < m.v.size(); ++i) clear.v[i] |= m.v[i];
-            }
-        sites.erase(std::remove_if(sites.begin(), sites.end(), [&](const Point& s) { return clear.at(s.first, s.second) != 0; }), sites.end());
-    }
+    Mask clear(w, h, 0);
+    for (const Placement& e : layout)
+        if (e.feat.kind == FeatKind::Clearing) {
+            const Mask m = featureMask(e, w, h);
+            for (size_t i = 0; i < m.v.size(); ++i) clear.v[i] |= m.v[i];
+        }
+    sites.erase(std::remove_if(sites.begin(), sites.end(), [&](const Point& s) { return clear.at(s.first, s.second) != 0; }), sites.end());
     steerFeatureFamilies(fam, layout, mud, sand);
+
+    // --- mountains: the shape is fixed before the transitions, as in landscape
+    // mode, because the ground under the walls must be one ground
+    MountainPlan plan;
+    if (mountainsWanted(p)) {
+        Mask keepFree = clear;
+        for (const auto& [vx, vy] : sites)
+            for (int y = std::max(0, vy - 10); y <= std::min(h - 1, vy + 10); ++y)
+                for (int x = std::max(0, vx - 10); x <= std::min(w - 1, vx + 10); ++x) keepFree.at(x, y) = 1;
+        if (p.landscape) {
+            const Mask rim = dilate4(landH, 3);
+            for (size_t i = 0; i < keepFree.v.size(); ++i) keepFree.v[i] |= rim.v[i];
+        }
+        plan = planMountains(p, keepFree);
+        if (!plan.empty() && profile.findGround("mud") >= 0) {
+            const Mask seam = plan.seam(w, h);
+            for (size_t i = 0; i < seam.v.size(); ++i)
+                if (seam.v[i]) fam.v[i] = static_cast<int16_t>(mud);
+        }
+    }
 
     // --- height field
     Mask volcanoBlock(w, h, 0);
@@ -361,6 +377,12 @@ Result generate(const Profile& profile, const Params& in) {
         for (size_t i = 0; i < H.v.size(); ++i) H.v[i] = static_cast<uint8_t>(H.v[i] | landH.v[i]);
     } else {
         H = heightField(p, rng, layout);
+    }
+    if (!plan.empty()) {
+        // The scattered patches make way for the mountains.
+        const Mask near = dilate4(plan.all(w, h), 9);
+        for (size_t i = 0; i < H.v.size(); ++i) if (near.v[i]) H.v[i] = 0;
+        H = removeSmallBits(H, 24);
     }
     if (p.symmetry != Sym::None) applySymmetry(H, p.symmetry);
     for (size_t i = 0; i < H.v.size(); ++i) if (volcanoBlock.v[i]) H.v[i] = 0;
@@ -413,6 +435,16 @@ Result generate(const Profile& profile, const Params& in) {
 
     // --- cliffs last: they need real ground neighbours
     Mask cliffs = cliffsFromContours(canvas, bm, H, rng, p.ramps);
+    Mask mountainWalls;
+    if (!plan.empty()) {
+        const Grid<int32_t> before = canvas.tiles;
+        WallCanvas wc{profile, table, canvas.packedOfMapping, canvas.cellOfMapping, canvas.tiles, canvas.cells};
+        mountainWalls = drawMountains(wc, plan, p, r.zones);
+        for (int y = 0; y < h; ++y)
+            for (int x = 0; x < w; ++x)
+                if (canvas.tiles.at(x, y) != before.at(x, y)) bm.setTile(x, y, canvas.tiles.at(x, y));
+        for (size_t i = 0; i < cliffs.v.size(); ++i) cliffs.v[i] |= mountainWalls.v[i];
+    }
     // Ground next to the new cliffs: re-pick what no longer fits.
     {
         om_rect all{0, 0, w, h};
@@ -424,6 +456,10 @@ Result generate(const Profile& profile, const Params& in) {
     // --- feature report and blocking (_apply_features)
     Mask blocked = volcanoBlock;
     for (size_t i = 0; i < blocked.v.size(); ++i) blocked.v[i] |= cliffs.v[i];
+    if (!plan.empty()) {
+        const Mask near = dilate4(mountainWalls, 1);
+        for (size_t i = 0; i < blocked.v.size(); ++i) blocked.v[i] |= near.v[i];
+    }
     for (const Placement& e : layout) {
         const Mask m = featureMask(e, w, h, 4);
         const int k = static_cast<int>(e.feat.kind);
@@ -461,6 +497,7 @@ Result generate(const Profile& profile, const Params& in) {
         zone.erase(std::remove_if(zone.begin(), zone.end(), [&](const Point& q) { return isCliff(cellTypes.at(q.first, q.second)); }), zone.end());
     r.lavaZones.erase(std::remove_if(r.lavaZones.begin(), r.lavaZones.end(), [](const auto& z) { return z.empty(); }), r.lavaZones.end());
 
+    if (!plan.empty()) zoneReport(cellTypes, plan, r.zones);
     r.spawns = pickSpawns(cellTypes, p.spawns, p.spawnClearance, p.symmetry, rng);
     r.tiles = canvas.tiles;
     r.cells = cellTypes;
@@ -481,6 +518,60 @@ Result generate(const Profile& profile, const Params& in) {
     for (const Placement& e : layout)
         r.featureSpots.push_back({e.feat.kind, e.x, e.y, e.radius ? e.radius : e.width});
     return r;
+}
+
+/// Classic cliffs as a cutout of a larger world (editor: maplib._aus_groesserer_welt):
+/// generated kWorldMargin cells larger on every side, then the middle is taken,
+/// so cliffs cross the map edge. Spawn points are picked afterwards.
+Result fromLargerWorld(const Profile& profile, const Params& in) {
+    const int R = kWorldMargin, w = in.width, h = in.height;
+    Params big = in;
+    big.width += 2 * R;
+    big.height += 2 * R;
+    big.spawns = 0;
+    big.worldCutout = false;
+    Result world = generateMap(profile, big);
+    Result r;
+    r.tiles = Grid<int32_t>(w, h);
+    r.cells = Grid<uint8_t>(w, h);
+    for (int y = 0; y < h; ++y)
+        for (int x = 0; x < w; ++x) {
+            r.tiles.at(x, y) = world.tiles.at(x + R, y + R);
+            r.cells.at(x, y) = world.cells.at(x + R, y + R);
+        }
+    Rng rng(in.seed ^ 0x77656c74ull);   // "welt"
+    r.spawns = pickSpawns(r.cells, in.spawns, in.spawnClearance, in.symmetry, rng);
+    const double area = static_cast<double>(w) * h;
+    r.passableShare = static_cast<double>(passableMask(r.cells).count()) / area;
+    r.connected = connected(r.cells, r.spawns);
+    size_t plateau = 0;
+    for (uint8_t ct : r.cells.v) plateau += isCliff(ct);
+    r.plateauShare = plateau / area;
+    r.detailShare = world.detailShare;
+    std::vector<om_mapping> table(profile.standardMapping.size());
+    for (size_t m = 0; m < table.size(); ++m)
+        table[m] = {profile.tilesets[profile.standardMapping[m].first].c_str(), profile.standardMapping[m].second};
+    std::vector<uint16_t> cells(r.tiles.v.begin(), r.tiles.v.end());
+    BlendMap bm(profile, w, h, table.data(), static_cast<int>(table.size()), cells.data());
+    r.familyShare.assign(profile.grounds.size(), 0.0);
+    for (int y = 0; y < h; ++y)
+        for (int x = 0; x < w; ++x) {
+            const int g = bm.groundAt(x, y);
+            if (g >= 0) r.familyShare[static_cast<size_t>(g)] += 1.0 / area;
+        }
+    return r;
+}
+
+}  // namespace
+
+Result generate(const Profile& profile, const Params& p) {
+    if (p.width < 16 || p.height < 16 || p.width > 1024 || p.height > 1024)
+        throw std::runtime_error("map size must be 16..1024 cells per side");
+    if (profile.standardMapping.empty())
+        throw std::runtime_error("the profile has no standard mapping table");
+    if (p.worldCutout && p.cliffs > 0 && p.volcanoes == 0 && p.features.empty() && !p.landscape && !mountainsWanted(p))
+        return fromLargerWorld(profile, p);
+    return generateMap(profile, p);
 }
 
 }  // namespace om::gen

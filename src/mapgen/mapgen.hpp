@@ -111,6 +111,15 @@ struct Params {
     std::vector<Feature> features;
     bool landscape = false;     ///< landschaft (New Terra relief mode)
     int rivers = -1;            ///< fluesse: dry riverbeds, -1 = by map size, 0 = none
+    // Mountains and building ground (mountains.cpp, Python: mapgen_berge.py)
+    double mountains = 0.0;         ///< berge: area share of the mountain chains (0 = none)
+    double mountainDensity = 0.8;   ///< berg_dichte: how tight the terraces stand (1 = as tight as the walls allow)
+    int gorges = 1;                 ///< schluchten: narrow passable cuts through a mountain
+    int valleys = 1;                ///< taeler: wide cuts with building ground
+    int plateaus = 0;               ///< hochebenen: one-terrace areas with building ground and ramps
+    bool mountainSpread = false;    ///< grossform: more, more varied mountains spread over the whole world
+    bool worldCutout = false;       ///< classic cliffs: plan a larger world and take the middle,
+                                    ///< so cliffs run off the map edge as in the original maps
 };
 
 /// Fills `p` with a template's mix, roughness, landscape and volcano settings

@@ -2,6 +2,7 @@
 #pragma once
 
 #include "mapgen.hpp"
+#include "mountains.hpp"
 
 namespace om { class Profile; }
 
@@ -26,6 +27,7 @@ struct Result {
     std::vector<double> familyShare;           ///< per profile ground
     std::array<int, 5> featureReport{};        ///< per FeatKind: cliff cells (clearings: count)
     std::vector<FeatureSpot> featureSpots;
+    MountainReport zones;                      ///< mountains only: walls and building ground per zone
 };
 
 /// Generates a map (same profile, params and seed = same map). Throws
