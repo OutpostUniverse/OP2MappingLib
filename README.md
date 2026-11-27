@@ -14,7 +14,7 @@ directly, .NET via P/Invoke, Python via ctypes, Rust, Delphi, WebAssembly.
 Much of op2maplib is **fefi-byte's work**: the terrain blending approach, the
 cliff tool, the learned Outpost 2 tile model and the whole map generator were
 designed and written by fefi-byte in
-[op2-codegen-editor](https://github.com/fefi-byte/op2-codegen-editor) and
+[OP2MissionBuilder](https://github.com/fefi-byte/op2-codegen-editor) and
 ported to C++ here (MIT, see [Credits](#credits)).
 
 New to the library? Start with [docs/using-op2maplib.md](docs/using-op2maplib.md).
@@ -47,7 +47,7 @@ Modules:
   riverbeds), volcanoes with lava-possible zones, scattered rocks and craters,
   and spawn points. Grounds come from the blend engine and cliffs from the
   cliff tool, so a generated map follows the same tile rules as painting.
-  The generator was designed and written by fefi-byte for op2-codegen-editor;
+  The generator was designed and written by fefi-byte for OP2MissionBuilder;
   this is a C++ port of it.
 
 ## Layout
@@ -59,7 +59,7 @@ Modules:
 | `src/mapgen/` | Map generator: biome field, shapes, relief and features, spawn points, the pipeline and its C API. |
 | `profiles/op2.json` | Outpost 2 blend profile (standard `well0000`–`well0012` tilesets). |
 | `docs/profile-format.md` | Profile format, and how the solver uses it. |
-| `tools/export_op2_profile.py` | Generates `profiles/op2.json` from op2-codegen-editor's learned tile model. |
+| `tools/export_op2_profile.py` | Generates `profiles/op2.json` from OP2MissionBuilder's learned tile model. |
 | `bindings/python/` | Python binding (ctypes) and its tests. |
 | `bindings/dotnet/` | .NET binding (`Op2MapLib.Net`, P/Invoke, .NET Framework 4.8; usable from C# and VB.NET), prebuilt native DLLs in `native/x86` and `native/x64`, and its tests. |
 | `tools/build-native.ps1` | Builds and tests the 32-bit and 64-bit DLLs and refreshes `bindings/dotnet/native/`. |
@@ -67,7 +67,7 @@ Modules:
 | `tests/` | C++ tests, and shared test vectors every binding must reproduce. |
 | `.github/workflows/build.yml` | CI: build and test on Windows (x64, x86), Linux and macOS; checksums, attestations and releases. |
 | `LICENSE` | MIT licence of this library. |
-| `THIRD-PARTY-NOTICES.md` | Licence of the op2-codegen-editor code this library is ported from. |
+| `THIRD-PARTY-NOTICES.md` | Licence of the OP2MissionBuilder code this library is ported from. |
 
 ## Building
 
@@ -205,7 +205,7 @@ in .NET: `new MapGenSettings("islands").Generate(profile)`.
 
 ## How cliffs work
 
-A port of op2-codegen-editor's cliff tool (`src/cliff.cpp`):
+A port of OP2MissionBuilder's cliff tool (`src/cliff.cpp`):
 
 1. **Band.** Each tile is split into 4x4 sub-cells, and a band of rock is drawn
    along the line on that grid.
@@ -236,12 +236,12 @@ Neighbouring cells share the corners of their common edge, so their tiles agree
 there without further matching. Tiles that already fit are kept, so
 re-resolving doesn't reshuffle the map. Details are in `docs/profile-format.md`.
 
-The approach and the Outpost 2 tile data come from op2-codegen-editor's terrain
+The approach and the Outpost 2 tile data come from OP2MissionBuilder's terrain
 brush, which learned them from the campaign maps.
 
 ## How the map generator works
 
-A C++ port of fefi-byte's map generator from op2-codegen-editor
+A C++ port of fefi-byte's map generator from OP2MissionBuilder
 (`mapview/mapgen*.py`, `shapegen.py`), in `src/mapgen/`. The design (the
 layout, the relief and feature shapes, the landscape mode, the measured
 tuning behind its settings) is fefi-byte's; the port keeps it and swaps the
@@ -302,7 +302,7 @@ Differences from the editor's generator:
   (straight, sloped, L/U shapes, loops; all sides; heights 3–6).
   - Every wall was solved without the greedy fallback, with no holes and no
     invalid tile pairs.
-  - Pairs never seen in the original maps: 8.2% on mud (op2-codegen-editor:
+  - Pairs never seen in the original maps: 8.2% on mud (OP2MissionBuilder:
     25–28%) and 66.5% on sand, whose edge data is automatic.
   - About 55 ms per wall on mud.
   - Not yet checked in the game itself.
@@ -333,7 +333,7 @@ Differences from the editor's generator:
       bent shapes such as L and U. Drawing downward, "left" is currently east.
   - profile, rock types: split "rock" into light rock and dark (lava) rock,
     and check for black rock too:
-    - op2-codegen-editor's model lumps them into one "rock" ground, so
+    - OP2MissionBuilder's model lumps them into one "rock" ground, so
       rock-filled areas come out as a light/dark checkerboard.
     - Analyse first:
       - decode the map's own terrain-type table (tile ranges, lava tile);
@@ -348,7 +348,7 @@ Differences from the editor's generator:
 ## Credits
 
 **fefi-byte**, author of
-[op2-codegen-editor](https://github.com/fefi-byte/op2-codegen-editor), whose
+[OP2MissionBuilder](https://github.com/fefi-byte/op2-codegen-editor), whose
 work much of this library is ported from (MIT License, see
 `THIRD-PARTY-NOTICES.md`):
 
@@ -366,4 +366,4 @@ regions module are this project's.
 
 ## License
 
-MIT, the same as op2-codegen-editor. See `LICENSE`.
+MIT, the same as OP2MissionBuilder. See `LICENSE`.
