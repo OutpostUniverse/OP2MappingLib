@@ -54,7 +54,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Sequence
 
-__all__ = ["Profile", "BlendMap", "Change", "TileRole", "CliffSide", "Op2MapLibError", "version",
+__all__ = ["LearnedModel", "LearnedQuality", "Profile", "BlendMap", "Change", "TileRole", "CliffSide", "Op2MapLibError", "version",
            "snap_cliff_point", "Regions", "MapGenerator", "GeneratedMap", "Symmetry", "FeatureKind"]
 
 
@@ -155,6 +155,10 @@ def _find_library() -> str:
         "op2maplib shared library not found; build it with CMake or set OP2MAPLIB_PATH")
 
 
+# om_progress_fn: int (double fraction, void* user), cdecl on every platform.
+_PROGRESS = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_double, ctypes.c_void_p)
+
+
 def _load():
     """Loads the library and declares every C function's signature.
 
@@ -231,6 +235,13 @@ def _load():
         "om_mapgen_feature_count": (ctypes.c_int, [P]),
         "om_mapgen_get_feature": (ctypes.c_int, [P, ctypes.c_int] + [ctypes.POINTER(ctypes.c_int32)] * 4),
         "om_mapgen_feature_report": (ctypes.c_int, [P, ctypes.c_int]),
+        "om_mapgen_model_load": (P, [ctypes.c_char_p, ctypes.c_size_t, ctypes.c_char_p, ctypes.c_size_t]),
+        "om_mapgen_model_free": (None, [P]),
+        "om_mapgen_generate_learned": (P, [P, P, P, ctypes.c_int, ctypes.c_int, _PROGRESS, P,
+                                           ctypes.c_char_p, ctypes.c_size_t]),
+        "om_mapgen_sketch_size": (ctypes.c_int, [P, ctypes.POINTER(ctypes.c_int32), ctypes.POINTER(ctypes.c_int32)]),
+        "om_mapgen_get_sketch": (ctypes.c_int, [P, ctypes.POINTER(ctypes.c_uint8), ctypes.POINTER(ctypes.c_uint8),
+                                                ctypes.c_int32]),
     }
     for name, (res, args) in sig.items():
         fn = getattr(lib, name)
@@ -728,6 +739,14 @@ class FeatureKind:
     CHOKE = 4       # a barrier across the map with one gap
 
 
+# Keys of om_mapgen_stat. The mountain keys are 0 (counts) or -1 (shares of a
+# zone the map does not have) without mountains.
+_MAPGEN_STATS = ("passable", "plateau", "details", "rivers", "connected",
+                 "mountains", "mountains_leaky", "plateaus", "plateaus_unreachable",
+                 "build", "build_mountain", "build_plateau", "build_valley", "build_gorge",
+                 "gorges", "gorges_passable")
+
+
 class MapGenerator:
     """Settings for generating a map (om_mapgen_settings_*).
 
@@ -738,7 +757,8 @@ class MapGenerator:
         gen.add_feature(FeatureKind.MOUNTAIN, where="c", size=0.6)
         result = gen.generate(profile)
 
-    Templates: plains, canyon, desert, islands, ice, newterra (unknown = plains).
+    Templates: plains, canyon, desert, islands, ice, newterra, learned
+    (unknown = plains; "learned" holds suggestions for generate_learned()).
     Keyword arguments are numeric settings (see set()), plus seed.
     """
 
@@ -763,7 +783,13 @@ class MapGenerator:
 
         Keys: width, height, seed, roughness, symmetry (Symmetry), spawns,
         spawn_clearance, cliffs, ramps, volcanoes, lava_zone_tiles, smooth,
-        vegetation_spacing, min_biome, details, landscape, rivers.
+        vegetation_spacing, min_biome, details, landscape, rivers; mountains,
+        mountain_density, gorges, valleys, plateaus, mountain_spread,
+        world_cutout, learned_rocks; learned generator only: biome_calm,
+        coherence, calm_terrain, lava_rock, volcanoes_small, volcanoes_medium,
+        volcanoes_large, craters, cracks, debris, gradient,
+        gradient_ground_start, gradient_ground_end, gradient_terrain_start,
+        gradient_terrain_end (see op2maplib.h, om_mapgen_set).
 
         Raises:
             KeyError: unknown key.
@@ -811,6 +837,77 @@ class MapGenerator:
         finally:
             _lib.om_mapgen_result_free(h)
 
+    def generate_learned(self, profile: Profile, model: "LearnedModel", quality: int = 1, threads: int = 0,
+                         progress=None) -> "GeneratedMap":
+        """Generates the map with the learned generator (om_mapgen_generate_learned).
+
+        quality: LearnedQuality.SKETCH (only the sketch, no tiles), FAST or GOOD.
+        threads: 0 = automatic; the map does not depend on it. progress: called
+        with the painted fraction 0..1; return False to cancel. Width and height
+        must be multiples of 8.
+
+        Raises:
+            Op2MapLibError: bad settings, or cancelled; the message says why.
+        """
+        err = ctypes.create_string_buffer(512)
+        failure = []
+
+        def report(fraction, _user):
+            if progress is None:
+                return 0
+            try:
+                return 1 if progress(fraction) is False else 0
+            except BaseException as e:   # stop the native call, raise afterwards
+                failure.append(e)
+                return 1
+        cb = _PROGRESS(report)
+        h = _lib.om_mapgen_generate_learned(profile._h, model._h, self._h, int(quality), int(threads), cb,
+                                            None, err, len(err))
+        if failure:
+            if h:
+                _lib.om_mapgen_result_free(h)
+            raise failure[0]
+        if not h:
+            raise Op2MapLibError(f"could not generate map: {err.value.decode(errors='replace')}")
+        try:
+            return GeneratedMap._from_handle(h, profile.ground_count)
+        finally:
+            _lib.om_mapgen_result_free(h)
+
+
+class LearnedQuality:
+    """Quality levels of the learned generator (om_learned_quality)."""
+    SKETCH = 0   # only the sketch, about a second
+    FAST = 1     # 6 painting rounds
+    GOOD = 2     # 24 painting rounds, about 1.5x slower
+
+
+class LearnedModel:
+    """The learned generator's networks (om_mapgen_model): profiles/op2-net.bin.
+
+        model = LearnedModel.from_file("profiles/op2-net.bin")
+        result = MapGenerator("learned", width=128, height=128, seed=7).generate_learned(profile, model)
+    """
+
+    def __init__(self, data: bytes):
+        err = ctypes.create_string_buffer(512)
+        self._h = _lib.om_mapgen_model_load(data, len(data), err, len(err))
+        if not self._h:
+            raise Op2MapLibError(f"could not load network file: {err.value.decode(errors='replace')}")
+
+    @classmethod
+    def from_file(cls, path) -> "LearnedModel":
+        return cls(Path(path).read_bytes())
+
+    def close(self) -> None:
+        """Frees the native model. Safe to call more than once."""
+        if getattr(self, "_h", None):
+            _lib.om_mapgen_model_free(self._h)
+            self._h = None
+
+    def __del__(self):
+        self.close()
+
 
 @dataclass
 class GeneratedMap:
@@ -831,6 +928,12 @@ class GeneratedMap:
     ground_shares: list[float]                 # per profile ground
     features: list[tuple[int, int, int, int]]   # (kind, x, y, size)
     feature_report: list[int]                   # per FeatureKind
+    # Learned generator only: its sketch at half resolution, row by row (walls
+    # 0 none / 1..8 fall direction E..NE; grounds 0 mud, 1 rock, 2 sand, 3 vegetation, 4 other).
+    sketch_width: int = 0
+    sketch_height: int = 0
+    sketch_walls: list[int] | None = None
+    sketch_grounds: list[int] | None = None
 
     @classmethod
     def _from_handle(cls, h, ground_count: int) -> "GeneratedMap":
@@ -851,12 +954,20 @@ class GeneratedMap:
         zones = [pts(_lib.om_mapgen_lava_zone_size(h, z), lambda b, c, z=z: _lib.om_mapgen_lava_zone_cells(h, z, b, c))
                  for z in range(_lib.om_mapgen_lava_zone_count(h))]
         stats = {k: _lib.om_mapgen_stat(h, k.encode())
-                 for k in ("passable", "plateau", "details", "rivers", "connected")}
+                 for k in _MAPGEN_STATS}
         shares = [_lib.om_mapgen_ground_share(h, g) for g in range(ground_count)]
         feats = []
         for i in range(_lib.om_mapgen_feature_count(h)):
             v = [ctypes.c_int32() for _ in range(4)]
             _lib.om_mapgen_get_feature(h, i, *[ctypes.byref(x) for x in v])
             feats.append(tuple(x.value for x in v))
+        sw, sh = ctypes.c_int32(), ctypes.c_int32()
+        sn = _lib.om_mapgen_sketch_size(h, ctypes.byref(sw), ctypes.byref(sh))
+        walls = grounds = None
+        if sn > 0:
+            wb, gb = (ctypes.c_uint8 * sn)(), (ctypes.c_uint8 * sn)()
+            _lib.om_mapgen_get_sketch(h, wb, gb, sn)
+            walls, grounds = list(wb), list(gb)
         return cls(w, ht, list(tiles), list(cells), lists[0], lists[1], zones, stats,
-                   shares, feats, [_lib.om_mapgen_feature_report(h, k) for k in range(5)])
+                   shares, feats, [_lib.om_mapgen_feature_report(h, k) for k in range(5)],
+                   sw.value, sh.value, walls, grounds)

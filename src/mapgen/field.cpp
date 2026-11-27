@@ -44,6 +44,26 @@ void applyTemplate(Params& p, const std::string& name) {
         p.roughness = 0.0;
         p.landscape = true;
         p.volcanoes = 1;
+    } else if (name == "learned") {
+        // Suggestions for the learned generator (om_mapgen_generate_learned): the training maps' mix.
+        p.mix = {{"mud", 0.59}, {"roc", 0.19}, {"san", 0.20}, {"veg", 0.02}};
+        p.roughness = 0.0;
+        p.mountains = 0.10;
+        p.mountainDensity = 0.5;
+        p.plateaus = 2;
+        p.cliffs = 0.12;
+        p.details = 0.10;
+        // The editor's template "netz" since op2-codegen-editor v0.12.0.
+        p.biomeCalm = 0.5;
+        p.coherence = 0.6;
+        p.calmTerrain = 0.5;
+        p.lavaRock = 0.5;
+        p.volcanoSizes[0] = 1;
+        p.volcanoSizes[1] = 1;
+        p.volcanoSizes[2] = 0;
+        p.craters = 0.3;
+        p.cracks = 0.3;
+        p.debris = 0.15;
     } else {   // plains, and unknown names
         p.mix = {{"mud", 0.45}, {"roc", 0.25}, {"san", 0.15}, {"veg", 0.15}};
         p.roughness = 0.0;

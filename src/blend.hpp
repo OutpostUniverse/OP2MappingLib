@@ -53,7 +53,8 @@ struct StampTile {
 /// A ready-made block of tiles the map generator places in one piece
 /// (scatter detail or volcano).
 struct Stamp {
-    std::string name;         ///< volcanoes only, e.g. "rocvolc1"
+    std::string name;         ///< volcanoes and decorations, e.g. "rocvolc1", "mudcrk3"
+    std::string kind;         ///< decorations only: "crater", "crack" or "debris"
     int ground = -1;          ///< details: the ground it belongs on, -1 = any
     int w = 0, h = 0;
     std::vector<StampTile> tiles;   ///< w * h, row by row
@@ -64,6 +65,7 @@ struct Stamp {
 struct GeneratorData {
     std::vector<Stamp> details;
     std::vector<Stamp> volcanoes;
+    std::vector<Stamp> decorations;   ///< named tile groups for the learned generator's craters, cracks, debris
 
     /// Packs (tileset, image) as the profile does: tileset * 4096 + image.
     static uint32_t pack(int tileset, int image) { return static_cast<uint32_t>(tileset) * 4096u + static_cast<uint32_t>(image); }

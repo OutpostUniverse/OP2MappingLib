@@ -45,6 +45,29 @@ Field field(Params& p, const char* key) {
     if (k == "details") return {&p.details};
     if (k == "landscape") return {nullptr, nullptr, &p.landscape};
     if (k == "rivers") return {nullptr, &p.rivers};
+    if (k == "mountains") return {&p.mountains};
+    if (k == "mountain_density") return {&p.mountainDensity};
+    if (k == "gorges") return {nullptr, &p.gorges};
+    if (k == "valleys") return {nullptr, &p.valleys};
+    if (k == "plateaus") return {nullptr, &p.plateaus};
+    if (k == "mountain_spread") return {nullptr, nullptr, &p.mountainSpread};
+    if (k == "world_cutout") return {nullptr, nullptr, &p.worldCutout};
+    if (k == "learned_rocks") return {nullptr, nullptr, &p.learnedRocks};
+    if (k == "biome_calm") return {&p.biomeCalm};
+    if (k == "coherence") return {&p.coherence};
+    if (k == "calm_terrain") return {&p.calmTerrain};
+    if (k == "lava_rock") return {&p.lavaRock};
+    if (k == "volcanoes_small") return {nullptr, &p.volcanoSizes[0]};
+    if (k == "volcanoes_medium") return {nullptr, &p.volcanoSizes[1]};
+    if (k == "volcanoes_large") return {nullptr, &p.volcanoSizes[2]};
+    if (k == "craters") return {&p.craters};
+    if (k == "cracks") return {&p.cracks};
+    if (k == "debris") return {&p.debris};
+    if (k == "gradient") return {nullptr, &p.gradient};
+    if (k == "gradient_ground_start") return {nullptr, &p.gradientGround[0]};
+    if (k == "gradient_ground_end") return {nullptr, &p.gradientGround[1]};
+    if (k == "gradient_terrain_start") return {&p.gradientTerrain[0]};
+    if (k == "gradient_terrain_end") return {&p.gradientTerrain[1]};
     return {};
 }
 
@@ -216,6 +239,18 @@ OM_API double OM_CALL om_mapgen_stat(const om_mapgen_result* result, const char*
     if (k == "details") return r.detailShare;
     if (k == "rivers") return r.riverShare;
     if (k == "connected") return r.connected ? 1 : 0;
+    const auto& z = r.zones;
+    if (k == "mountains") return z.mountains;
+    if (k == "mountains_leaky") return z.leaky;
+    if (k == "plateaus") return z.plateaus;
+    if (k == "plateaus_unreachable") return z.unreachable;
+    if (k == "build") return z.build;
+    if (k == "build_mountain") return z.buildMountain;
+    if (k == "build_plateau") return z.buildPlateau;
+    if (k == "build_valley") return z.buildValley;
+    if (k == "build_gorge") return z.buildGorge;
+    if (k == "gorges") return z.gorges;
+    if (k == "gorges_passable") return z.gorgesPassable;
     return 0;
 }
 

@@ -162,6 +162,53 @@ internal static class Program
                 GeneratedMap map = gen.Generate(profile);
                 Check(map.Volcanoes.Length == 1 && map.LavaZones.Length >= 1 && map.RiverShare > 0, "mapgen: newterra volcano and rivers");
             }
+            // Mountains (tests/vectors/mapgen_mountains.json): closed, reachable plateaus.
+            using (var gen = new MapGenSettings("plains"))
+            {
+                gen.Set("width", 64);
+                gen.Set("height", 64);
+                gen.Set("mountains", 0.14);
+                gen.Set("plateaus", 1);
+                gen.Set("spawns", 2);
+                gen.Seed = 7;
+                GeneratedMap map = gen.Generate(profile);
+                string hash = Fnv1a64(map.Tiles.Select(t => (int)t));
+                Console.WriteLine("mountains golden hash: " + hash);
+                Check(hash == "683ac10cc3dfc740", "mountains golden hash matches C++ and Python");
+                Check(map.Stats["mountains"] >= 1 && map.Stats["mountains_leaky"] == 0, "mountains closed");
+                Check(map.Stats["plateaus_unreachable"] == 0, "plateaus reachable");
+            }
+            // Learned generator (tests/vectors/mapgen_learned.json), the same for any thread count.
+            using (var model = LearnedModel.LoadDefault())
+            using (var gen = new MapGenSettings("learned"))
+            {
+                gen.Set("width", 64);
+                gen.Set("height", 64);
+                gen.Set("spawns", 2);
+                foreach (string k in new[] { "biome_calm", "coherence", "calm_terrain", "lava_rock", "volcanoes_small",
+                                             "volcanoes_medium", "volcanoes_large", "craters", "cracks", "debris" })
+                    gen.Set(k, 0);   // the additions off: the golden map of tests/vectors/mapgen_learned.json
+                gen.Seed = 3;
+                double last = 0;
+                GeneratedMap map = gen.GenerateLearned(profile, model, LearnedQuality.Fast, 1, f => { last = f; return true; });
+                string hash = Fnv1a64(map.Tiles.Select(t => (int)t));
+                Console.WriteLine("learned golden hash: " + hash);
+                Check(hash == "05a14ace030553ef", "learned golden hash matches C++ and Python");
+                Check(Fnv1a64(gen.GenerateLearned(profile, model, LearnedQuality.Fast, 3).Tiles.Select(t => (int)t)) == hash,
+                      "learned: same map with 3 threads");
+                Check(last == 1.0 && map.SketchWidth == 32 && map.SketchWalls.Length == 32 * 32, "learned: progress and sketch");
+                GeneratedMap sketch = gen.GenerateLearned(profile, model, LearnedQuality.Sketch);
+                Check(sketch.Width == 0 && sketch.SketchWalls.SequenceEqual(map.SketchWalls), "learned: sketch only");
+                try
+                {
+                    gen.GenerateLearned(profile, model, LearnedQuality.Fast, 0, f => false);
+                    Check(false, "learned: cancel throws");
+                }
+                catch (Op2MapLibException e)
+                {
+                    Check(e.Message.Contains("cancelled"), "learned: cancel reported");
+                }
+            }
 
             // Native errors surface as Op2MapLibException carrying the library's message.
             try

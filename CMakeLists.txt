@@ -35,6 +35,12 @@ set(OP2MAPLIB_SOURCES
     src/mapgen/api_mapgen.cpp
     src/mapgen/field.cpp
     src/mapgen/generate.cpp
+    src/mapgen/mountains.cpp
+    src/mapgen/net.cpp
+    src/mapgen/learned_sketch.cpp
+    src/mapgen/learned_tiles.cpp
+    src/mapgen/learned_extra.cpp
+    src/mapgen/api_learned.cpp
     src/mapgen/paths.cpp
     src/mapgen/relief.cpp
     src/mapgen/shape.cpp
@@ -67,7 +73,13 @@ if(MSVC)
     # Static runtime, so the DLL works without the VC++ redistributable.
     set_property(TARGET op2maplib PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 else()
-    target_compile_options(op2maplib PRIVATE -Wall -Wextra -Wpedantic)
+    # No fused multiply-add: it rounds differently, and every platform must give the
+    # same maps (the learned generator sums millions of products).
+    target_compile_options(op2maplib PRIVATE -Wall -Wextra -Wpedantic -ffp-contract=off)
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+        # 32-byte vector types in internal functions (src/mapgen/net.cpp); no ABI is exposed.
+        target_compile_options(op2maplib PRIVATE -Wno-psabi)
+    endif()
 endif()
 
 install(TARGETS op2maplib RUNTIME DESTINATION bin LIBRARY DESTINATION lib ARCHIVE DESTINATION lib)

@@ -765,7 +765,8 @@ namespace Op2MapLib
         private IntPtr _handle;
         private ulong _seed = 1;
 
-        /// <summary>Creates settings from a template: plains, canyon, desert, islands, ice or newterra (unknown = plains).</summary>
+        /// <summary>Creates settings from a template: plains, canyon, desert, islands, ice, newterra or learned
+        /// (unknown = plains; learned holds suggestions for <see cref="GenerateLearned"/>).</summary>
         /// <param name="template">Template name; null or "" = plains.</param>
         /// <exception cref="Op2MapLibException">The native library could not create the settings.</exception>
         public MapGenSettings(string template = "plains")
@@ -777,7 +778,11 @@ namespace Op2MapLib
         /// <summary>
         /// Sets a numeric setting: width, height, roughness, symmetry (<see cref="MapSymmetry"/>),
         /// spawns, spawn_clearance, cliffs, ramps, volcanoes, lava_zone_tiles, smooth,
-        /// vegetation_spacing, min_biome, details, landscape, rivers. See op2maplib.h for meanings and defaults.
+        /// vegetation_spacing, min_biome, details, landscape, rivers; mountains, mountain_density, gorges,
+        /// valleys, plateaus, mountain_spread, world_cutout, learned_rocks; learned generator only: biome_calm,
+        /// coherence, calm_terrain, lava_rock, volcanoes_small, volcanoes_medium, volcanoes_large, craters, cracks,
+        /// debris, gradient, gradient_ground_start, gradient_ground_end, gradient_terrain_start, gradient_terrain_end.
+        /// See op2maplib.h for meanings and defaults.
         /// </summary>
         /// <exception cref="ArgumentException">Unknown key or invalid value.</exception>
         public void Set(string key, double value)
@@ -830,6 +835,43 @@ namespace Op2MapLib
             finally { Native.om_mapgen_result_free(r); }
         }
 
+        /// <summary>
+        /// Generates the map with the learned generator (om_mapgen_generate_learned): maps in the
+        /// style of the original maps from two small neural networks (<see cref="LearnedModel"/>).
+        /// Width and height must be multiples of 8. The map does not depend on <paramref name="threads"/>.
+        /// </summary>
+        /// <param name="profile">The Outpost 2 profile (profiles/op2.json).</param>
+        /// <param name="model">The network file (profiles/op2-net.bin).</param>
+        /// <param name="quality">Sketch only, fast or good.</param>
+        /// <param name="threads">Compute threads, 0 = automatic.</param>
+        /// <param name="progress">Called with the painted share 0..1; return false to cancel. May be null.</param>
+        /// <exception cref="Op2MapLibException">Bad settings, or cancelled; the message says why.</exception>
+        public GeneratedMap GenerateLearned(BlendProfile profile, LearnedModel model, LearnedQuality quality = LearnedQuality.Fast,
+                                            int threads = 0, Func<double, bool> progress = null)
+        {
+            if (profile == null) throw new ArgumentNullException(nameof(profile));
+            if (model == null) throw new ArgumentNullException(nameof(model));
+            Exception failure = null;
+            Native.ProgressFn cb = (fraction, user) =>
+            {
+                if (progress == null) return 0;
+                try { return progress(fraction) ? 0 : 1; }
+                catch (Exception e) { failure = e; return 1; }   // stop the native call, rethrow below
+            };
+            var err = new StringBuilder(512);
+            IntPtr r = Native.om_mapgen_generate_learned(profile.Live, model.Live, Live, (int)quality, threads, cb, IntPtr.Zero,
+                                                         err, (UIntPtr)err.Capacity);
+            GC.KeepAlive(cb);
+            if (failure != null)
+            {
+                if (r != IntPtr.Zero) Native.om_mapgen_result_free(r);
+                throw failure;
+            }
+            if (r == IntPtr.Zero) throw new Op2MapLibException("Could not generate the map: " + err);
+            try { return new GeneratedMap(r, profile.GroundCount); }
+            finally { Native.om_mapgen_result_free(r); }
+        }
+
         private IntPtr Live
         {
             get
@@ -854,6 +896,69 @@ namespace Op2MapLib
         ~MapGenSettings()
         {
             if (_handle != IntPtr.Zero) Native.om_mapgen_settings_free(_handle);
+        }
+    }
+
+    /// <summary>Quality levels of the learned generator (om_learned_quality).</summary>
+    public enum LearnedQuality
+    {
+        /// <summary>Only the sketch (about a second); the result has no tiles.</summary>
+        Sketch = 0,
+        /// <summary>6 painting rounds.</summary>
+        Fast = 1,
+        /// <summary>24 painting rounds, fewer odd spots, about 1.5x slower.</summary>
+        Good = 2,
+    }
+
+    /// <summary>
+    /// The learned generator's networks and tile tables (om_mapgen_model), loaded from
+    /// profiles/op2-net.bin. Thread-safe to share between generator calls.
+    /// </summary>
+    public sealed class LearnedModel : IDisposable
+    {
+        private IntPtr _handle;
+
+        /// <summary>Loads a network file from memory.</summary>
+        /// <exception cref="Op2MapLibException">The data is not a usable network file.</exception>
+        public LearnedModel(byte[] data)
+        {
+            if (data == null) throw new ArgumentNullException(nameof(data));
+            var err = new StringBuilder(512);
+            _handle = Native.om_mapgen_model_load(data, (UIntPtr)data.Length, err, (UIntPtr)err.Capacity);
+            if (_handle == IntPtr.Zero) throw new Op2MapLibException("Could not load the network file: " + err);
+        }
+
+        /// <summary>Loads a network file (profiles/op2-net.bin).</summary>
+        public static LearnedModel FromFile(string path) => new LearnedModel(System.IO.File.ReadAllBytes(path));
+
+        /// <summary>Loads op2maplib\op2-net.bin next to this assembly (the project file copies it there).</summary>
+        /// <exception cref="FileNotFoundException">The file is missing.</exception>
+        public static LearnedModel LoadDefault() => FromFile(Path.Combine(Native.AssemblyFolder, "op2maplib", "op2-net.bin"));
+
+        internal IntPtr Live
+        {
+            get
+            {
+                if (_handle == IntPtr.Zero) throw new ObjectDisposedException(nameof(LearnedModel));
+                return _handle;
+            }
+        }
+
+        /// <summary>Frees the native model. Calling Dispose more than once is harmless.</summary>
+        public void Dispose()
+        {
+            if (_handle != IntPtr.Zero)
+            {
+                Native.om_mapgen_model_free(_handle);
+                _handle = IntPtr.Zero;
+            }
+            GC.SuppressFinalize(this);
+        }
+
+        /// <summary>Frees the native model if <see cref="Dispose"/> was not called.</summary>
+        ~LearnedModel()
+        {
+            if (_handle != IntPtr.Zero) Native.om_mapgen_model_free(_handle);
         }
     }
 
@@ -890,6 +995,26 @@ namespace Op2MapLib
         public int[] FeatureReport { get; }
         /// <summary>Features as placed: kind, centre/start and size (radius or width).</summary>
         public (MapFeature Kind, int X, int Y, int Size)[] Features { get; }
+        /// <summary>
+        /// Every statistic of om_mapgen_stat by key, including the zone statistics of
+        /// mountains and plateaus ("mountains", "mountains_leaky", "build", "build_mountain", ...).
+        /// </summary>
+        public IReadOnlyDictionary<string, double> Stats { get; }
+        /// <summary>Learned generator only: sketch width (half the map width), else 0.</summary>
+        public int SketchWidth { get; }
+        /// <summary>Learned generator only: sketch height, else 0.</summary>
+        public int SketchHeight { get; }
+        /// <summary>Sketch walls row by row: 0 none, 1..8 fall direction E, SE, S, SW, W, NW, N, NE.</summary>
+        public byte[] SketchWalls { get; }
+        /// <summary>Sketch grounds row by row: 0 mud, 1 rock, 2 sand, 3 vegetation, 4 other.</summary>
+        public byte[] SketchGrounds { get; }
+
+        private static readonly string[] StatKeys =
+        {
+            "passable", "plateau", "details", "rivers", "connected", "mountains", "mountains_leaky", "plateaus",
+            "plateaus_unreachable", "build", "build_mountain", "build_plateau", "build_valley", "build_gorge",
+            "gorges", "gorges_passable",
+        };
 
         internal GeneratedMap(IntPtr r, int groundCount)
         {
@@ -914,6 +1039,15 @@ namespace Op2MapLib
             for (int g = 0; g < groundCount; g++) GroundShares[g] = Native.om_mapgen_ground_share(r, g);
             FeatureReport = new int[5];
             for (int k = 0; k < 5; k++) FeatureReport[k] = Native.om_mapgen_feature_report(r, k);
+            var stats = new Dictionary<string, double>();
+            foreach (string k in StatKeys) stats[k] = Native.om_mapgen_stat(r, k);
+            Stats = stats;
+            int sn = Native.om_mapgen_sketch_size(r, out int sw, out int sh);
+            SketchWidth = sw;
+            SketchHeight = sh;
+            SketchWalls = new byte[sn];
+            SketchGrounds = new byte[sn];
+            if (sn > 0) Native.om_mapgen_get_sketch(r, SketchWalls, SketchGrounds, sn);
             Features = new (MapFeature, int, int, int)[Native.om_mapgen_feature_count(r)];
             for (int i = 0; i < Features.Length; i++)
             {
@@ -1106,5 +1240,19 @@ namespace Op2MapLib
         [DllImport(Lib, CallingConvention = CC)]
         internal static extern int om_mapgen_get_feature(IntPtr r, int index, out int kind, out int x, out int y, out int size);
         [DllImport(Lib, CallingConvention = CC)] internal static extern int om_mapgen_feature_report(IntPtr r, int kind);
+
+        // Learned generator. The progress delegate must stay alive for the call
+        // (GenerateLearned keeps it); it returns nonzero to cancel.
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        internal delegate int ProgressFn(double fraction, IntPtr user);
+        [DllImport(Lib, CallingConvention = CC)]
+        internal static extern IntPtr om_mapgen_model_load([In] byte[] data, UIntPtr len, StringBuilder err, UIntPtr errSize);
+        [DllImport(Lib, CallingConvention = CC)] internal static extern void om_mapgen_model_free(IntPtr m);
+        [DllImport(Lib, CallingConvention = CC)]
+        internal static extern IntPtr om_mapgen_generate_learned(IntPtr profile, IntPtr model, IntPtr settings, int quality, int threads,
+                                                                ProgressFn progress, IntPtr user, StringBuilder err, UIntPtr errSize);
+        [DllImport(Lib, CallingConvention = CC)] internal static extern int om_mapgen_sketch_size(IntPtr r, out int width, out int height);
+        [DllImport(Lib, CallingConvention = CC)]
+        internal static extern int om_mapgen_get_sketch(IntPtr r, [Out] byte[] walls, [Out] byte[] grounds, int max);
     }
 }

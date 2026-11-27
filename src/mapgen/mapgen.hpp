@@ -111,7 +111,39 @@ struct Params {
     std::vector<Feature> features;
     bool landscape = false;     ///< landschaft (New Terra relief mode)
     int rivers = -1;            ///< fluesse: dry riverbeds, -1 = by map size, 0 = none
+    // Mountains and building ground (mountains.cpp, Python: mapgen_berge.py)
+    double mountains = 0.0;         ///< berge: area share of the mountain chains (0 = none)
+    double mountainDensity = 0.8;   ///< berg_dichte: how tight the terraces stand (1 = as tight as the walls allow)
+    int gorges = 1;                 ///< schluchten: narrow passable cuts through a mountain
+    int valleys = 1;                ///< taeler: wide cuts with building ground
+    int plateaus = 0;               ///< hochebenen: one-terrace areas with building ground and ramps
+    bool mountainSpread = false;    ///< grossform: more, more varied mountains spread over the whole world
+    bool learnedRocks = true;       ///< berg_felsen, learned generator only: rocks and craters where the
+                                    ///< walls alone leave building ground in mountains and gorges
+    bool worldCutout = false;       ///< classic cliffs: plan a larger world and take the middle,
+                                    ///< so cliffs run off the map edge as in the original maps
+    // Learned generator only (learned_extra.cpp). 0 everywhere = the generator as before.
+    double biomeCalm = 0.0;         ///< biom_ruhe: merge grounds into larger areas, walls act as barriers
+    double coherence = 0.0;         ///< grossform: height plan of the whole map, its contours become cliffs
+    double calmTerrain = 0.0;       ///< gelaende_ruhe: fewer, longer cliffs, fewer terraces and hills
+    double lavaRock = 0.0;          ///< lavafels: dark lava cores in rock areas (0.5 = as the originals)
+    int volcanoSizes[3] = {0, 0, 0};    ///< vulkane: small, medium, large volcanoes with a reserved site
+    double craters = 0.0;           ///< krater: impact craters on dirt and sand
+    double cracks = 0.0;            ///< risse: long cracks in rock
+    double debris = 0.0;            ///< truemmer: crash sites (wreckage, rubble, burn marks)
+    int gradient = 0;               ///< verlauf: 0 off, 1..10 = kGradients
+    int gradientGround[2] = {-1, -1};       ///< verlauf_boden at start / end: -1 mix, 0 mud, 1 rock, 2 sand
+    double gradientTerrain[2] = {.5, .5};   ///< verlauf_gelaende at start / end: 0 flat .. 1 rugged
 };
+
+/// Gradient directions (Python: VERLAEUFE), Params::gradient - 1 indexes them.
+inline const char* const kGradients[10] = {"n-s", "s-n", "w-o", "o-w", "nw-so", "so-nw", "no-sw", "sw-no",
+                                           "mitte-rand", "rand-mitte"};
+/// verlauf_feld: 0 at the gradient's start, 1 at its end, on a world `margin`
+/// cells larger on every side. False (u untouched) without a gradient.
+bool gradientField(const Params& p, int w, int h, int margin, Floats& u);
+/// verlauf_gelaende: terrain per cell, 0 flat .. 1 rugged. False without a gradient.
+bool gradientTerrain(const Params& p, int w, int h, int margin, Floats& rough);
 
 /// Fills `p` with a template's mix, roughness, landscape and volcano settings
 /// (Python: MapGenParams.from_template). Unknown names give "plains".

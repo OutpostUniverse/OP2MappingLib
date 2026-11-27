@@ -94,7 +94,8 @@ skips its seam pass.
 | Field | Type | Meaning |
 |---|---|---|
 | `details` | object[] | Scatter stamps (rocks, cracks, craters): `{ "ground": "mud", "w": 2, "h": 1, "tiles": [[ts, img, cell], ...] }`. `ground` is the ground the stamp belongs on ("" = any); `tiles` holds `w * h` entries, row by row, each `[tileset index, image, cell type]`. |
-| `volcanoes` | object[] | Volcano stamps: `{ "name": "rocvolc1", "w": 6, "h": 6, "tiles": [...] }`, tiles as for `details`. |
+| `volcanoes` | object[] | Volcano stamps: `{ "name": "rocvolc1", "w": 6, "h": 6, "tiles": [...] }`, tiles as for `details`. The learned generator picks them by name: `rocvolc2` small, `rocvolc3` (on lava rock) or `rocvolc1` medium, `rocvolc4` large. |
+| `decorations` | object[] | Named tile groups for the learned generator's craters, cracks and debris: `{ "name": "mudcrk3", "kind": "crater", "ground": "mud", "w": 3, "h": 2, "tiles": [...] }`; `kind` is `crater`, `crack` or `debris`, tiles as for `details`. Exported from op2-codegen-editor's `kachelgruppen.json` by `tools/export_op2_profile.py`. |
 | `right` | int[] | Tile pairs seen side by side in the original maps (left, right), as one flat array `a0, b0, a1, b1, ...`. Each tile is packed as `tileset * 4096 + image`. |
 | `down` | int[] | The same for vertical pairs (top, bottom). |
 

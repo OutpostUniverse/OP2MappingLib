@@ -1,0 +1,15 @@
+{
+  "description": "Map generator golden map with mountains: template 'plains', 64x64, seed 7, mountains 0.14, plateaus 1, 2 spawns, all other settings default. Hash the tile grid (standard mapping index per cell, row by row) with FNV-1a 64 over each value's 4 little-endian bytes.",
+  "profile": "profiles/op2.json",
+  "template": "plains",
+  "settings": {
+    "width": 64,
+    "height": 64,
+    "mountains": 0.14,
+    "plateaus": 1,
+    "spawns": 2
+  },
+  "seed": 7,
+  "features": [],
+  "fnv1a64": "683ac10cc3dfc740"
+}

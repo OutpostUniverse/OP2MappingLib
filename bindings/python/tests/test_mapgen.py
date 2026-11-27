@@ -29,7 +29,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO / "bindings" / "python"))
 
-from op2maplib import FeatureKind, MapGenerator, Profile, Symmetry, version  # noqa: E402
+from op2maplib import (FeatureKind, LearnedModel, LearnedQuality, MapGenerator, Op2MapLibError,  # noqa: E402
+                       Profile, Symmetry, version)
 
 failures = 0
 
@@ -150,6 +151,57 @@ def main() -> int:
                    for y in range(h) for x in range(w))
         print(f"symmetry {sym}: passability mirrored for {100 * same / (w * h):.1f} % of cells, spawns {m.spawns}")
         check(same / (w * h) > 0.95, f"symmetry {sym}: passability mostly mirrored")
+
+    # 4. Mountains, gorges, valleys and plateaus; classic cliffs as a world cutout.
+    vec = json.loads((REPO / "tests" / "vectors" / "mapgen_mountains.json").read_text(encoding="utf-8"))
+    m = MapGenerator(vec["template"], seed=vec["seed"], **vec["settings"]).generate(profile)
+    got = fnv1a64(m.tiles)
+    zones = {k: m.stats[k] for k in ("mountains", "mountains_leaky", "plateaus", "plateaus_unreachable",
+                                     "build", "build_mountain", "build_plateau")}
+    print(f"\nmountains: {zones}, hash {got}")
+    check(got == vec["fnv1a64"], f"mountain map hash {got} == {vec['fnv1a64']}")
+    check(m.stats["mountains"] >= 1 and m.stats["mountains_leaky"] == 0, "mountains closed")
+    check(m.stats["plateaus_unreachable"] == 0 and m.stats["build_mountain"] < 0.1, "plateaus reachable, no building in mountains")
+    for sym in (Symmetry.MIRROR_X, Symmetry.QUAD):
+        m = MapGenerator("plains", width=128, height=128, seed=11, mountains=0.14, plateaus=2, symmetry=sym,
+                         spawns=4 if sym == Symmetry.QUAD else 2).generate(profile)
+        check(m.stats["mountains_leaky"] == 0 and m.stats["connected"] == 1.0, f"mountains with symmetry {sym}")
+    m = MapGenerator("plains", width=64, height=64, seed=7, cliffs=0.2, world_cutout=1).generate(profile)
+    edge = sum(m.cell_types[i] in (8, 9, 10) for i in (list(range(64)) + list(range(63 * 64, 64 * 64)) +
+                                                     list(range(0, 4096, 64)) + list(range(63, 4096, 64))))
+    check(edge > 0, f"world cutout: cliffs cross the map edge ({edge} edge cells)")
+
+    # 5. Learned generator, shared golden map; the same for any thread count.
+    vec = json.loads((REPO / "tests" / "vectors" / "mapgen_learned.json").read_text(encoding="utf-8"))
+    model = LearnedModel.from_file(REPO / vec["model"])
+    gen = MapGenerator(vec["template"], seed=vec["seed"], **vec["settings"])
+    seen = []
+    t = time.perf_counter()
+    m = gen.generate_learned(profile, model, vec["quality"], threads=1, progress=seen.append)
+    ms = (time.perf_counter() - t) * 1000
+    got = fnv1a64(m.tiles)
+    print(f"learned 64x64: {ms:.0f} ms, hash {got}, build {m.stats['build']:.3f}, sketch {m.sketch_width}x{m.sketch_height}")
+    check(got == vec["fnv1a64"], f"learned map hash {got} == {vec['fnv1a64']}")
+    check(fnv1a64(gen.generate_learned(profile, model, vec["quality"], threads=3).tiles) == got, "same map with 3 threads")
+    check(seen and seen[-1] == 1.0, "progress reaches 1")
+    check(m.sketch_width == 32 and len(m.sketch_walls) == 32 * 32, "sketch at half size")
+    # The template with all additions (coherence, calm biomes and terrain, lava rock, volcanoes, decorations).
+    full = json.loads((REPO / "tests" / "vectors" / "mapgen_learned_full.json").read_text(encoding="utf-8"))
+    fm = MapGenerator(full["template"], seed=full["seed"], **full["settings"]).generate_learned(profile, model, full["quality"])
+    check(fnv1a64(fm.tiles) == full["fnv1a64"], f"learned map with all additions, hash {fnv1a64(fm.tiles)} == {full['fnv1a64']}")
+    check(len(fm.volcanoes) >= 1, f"learned: volcanoes placed ({len(fm.volcanoes)})")
+    sk = gen.generate_learned(profile, model, LearnedQuality.SKETCH)
+    check(sk.width == 0 and sk.sketch_walls == m.sketch_walls, "sketch only, same sketch")
+    try:
+        gen.generate_learned(profile, model, progress=lambda f: False)
+        check(False, "cancel stops the generator")
+    except Op2MapLibError as e:
+        check("cancelled" in str(e), f"cancel reported ({e})")
+    try:
+        MapGenerator("learned", width=60, height=64).generate_learned(profile, model)
+        check(False, "learned generator refuses sizes that are no multiple of 8")
+    except Op2MapLibError:
+        pass
 
     try:
         MapGenerator("plains", width=8).generate(profile)

@@ -136,6 +136,7 @@ void Profile::parseGenerator(Profile& p, const json::Value& g) {
         for (const json::Value& s : list->array()) {
             Stamp st;
             if (const json::Value* n = s.find("name")) st.name = n->string();
+            if (const json::Value* k = s.find("kind")) st.kind = k->string();
             if (const json::Value* gr = s.find("ground"); gr && !gr->string().empty()) {
                 st.ground = p.findGround(gr->string());
                 if (st.ground < 0) throw std::runtime_error("generator stamp: unknown ground \"" + gr->string() + "\"");
@@ -158,6 +159,7 @@ void Profile::parseGenerator(Profile& p, const json::Value& g) {
     };
     stamps("details", p.generator.details);
     stamps("volcanoes", p.generator.volcanoes);
+    stamps("decorations", p.generator.decorations);
 
     auto pairs = [&](const char* key, std::unordered_map<uint64_t, uint8_t>& seen,
                      std::unordered_map<uint32_t, uint8_t>& known) {
