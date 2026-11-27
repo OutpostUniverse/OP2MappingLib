@@ -21,7 +21,7 @@ Example (Windows cmd; ^ continues the line):
         profiles/op2.json
 
 Inputs read from the mapview folder: tiles_model.npz, celltypes.json,
-cliff_kanten.json, cliff_kanten_auto.json, cliff_tiles_model.npz and
+kachelgruppen.json (named tile groups: craters, cracks, debris), cliff_kanten.json, cliff_kanten_auto.json, cliff_tiles_model.npz and
 cliff_pixels_model.npz. Many keys and constants in those files are German
 (e.g. "kanten" = edges, "kacheln" = tiles, "muster" = pattern); the comments
 below name the source of each rule. Prints a summary when done; exits with
@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import ast
 import json
+import re
 import struct
 import sys
 import zipfile
@@ -402,6 +403,33 @@ def export_generator(m: dict, mappings: list, default_cell: dict) -> dict:
     return {"details": details, "volcanoes": volcanoes, "right": seen("right"), "down": seen("down")}
 
 
+# Learned generator decorations: kind -> pattern of the tile group names in
+# kachelgruppen.json (op2-codegen-editor mapview/mapgen_netz_deko.py).
+DECORATION_KINDS = {"crater": r"(mudcrk|sancrat|sancratx)\d+$",
+                    "crack": r"roccrac\d+$",
+                    "debris": r"(mud|roc|san)(wrk|rub|burn)\d*$"}
+
+
+def export_decorations(mapview: Path, mappings: list, default_cell: dict, ground_ids: list) -> list:
+    """Named tile groups for the learned generator's craters, cracks and debris
+    (profile section "generator.decorations"). The groups were cut from the
+    game's tilesets by op2-codegen-editor (kachelgruppen.json: "kacheln" are
+    standard mapping indices, "breite" x "hoehe" the size); the ground is the
+    group name's prefix (mud, roc, san)."""
+    groups = json.loads((mapview / "kachelgruppen.json").read_text(encoding="utf-8"))
+    out = []
+    for kind, pattern in DECORATION_KINDS.items():
+        for name, e in groups.items():
+            if not re.match(pattern, name) or name[:3] not in ground_ids:
+                continue
+            tiles = e["kacheln"]
+            if len(tiles) != e["breite"] * e["hoehe"] or any(t >= len(mappings) for t in tiles):
+                continue
+            out.append({"name": name, "kind": kind, "ground": name[:3], "w": e["breite"], "h": e["hoehe"],
+                        "tiles": [[*mappings[t], default_cell.get(t, -1)] for t in tiles]})
+    return out
+
+
 def main(argv: list[str]) -> int:
     """Exports the profile; argv as sys.argv. Returns the process exit code."""
     if len(argv) != 4:
@@ -530,6 +558,7 @@ def main(argv: list[str]) -> int:
         "cliffs": export_cliffs(mapview, mappings, family_of, ground_ids, default_cell),
         "generator": export_generator(m, mappings, default_cell),
     }
+    profile["generator"]["decorations"] = export_decorations(mapview, mappings, default_cell, ground_ids)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     # The two pair tables hold ~60,000 numbers; indented they would put each on
@@ -569,6 +598,7 @@ def main(argv: list[str]) -> int:
           f"{len(cl['tiles'])} tiles, {no_inner} without inner image")
     gen = profile["generator"]
     print(f"generator: {len(gen['details'])} detail stamps, {len(gen['volcanoes'])} volcanoes, "
+          f"{len(gen['decorations'])} decorations, "
           f"{len(gen['right']) // 2} right pairs, {len(gen['down']) // 2} down pairs")
     return 0
 
