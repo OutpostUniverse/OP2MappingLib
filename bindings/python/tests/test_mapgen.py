@@ -185,6 +185,11 @@ def main() -> int:
     check(fnv1a64(gen.generate_learned(profile, model, vec["quality"], threads=3).tiles) == got, "same map with 3 threads")
     check(seen and seen[-1] == 1.0, "progress reaches 1")
     check(m.sketch_width == 32 and len(m.sketch_walls) == 32 * 32, "sketch at half size")
+    # The template with all additions (coherence, calm biomes and terrain, lava rock, volcanoes, decorations).
+    full = json.loads((REPO / "tests" / "vectors" / "mapgen_learned_full.json").read_text(encoding="utf-8"))
+    fm = MapGenerator(full["template"], seed=full["seed"], **full["settings"]).generate_learned(profile, model, full["quality"])
+    check(fnv1a64(fm.tiles) == full["fnv1a64"], f"learned map with all additions, hash {fnv1a64(fm.tiles)} == {full['fnv1a64']}")
+    check(len(fm.volcanoes) >= 1, f"learned: volcanoes placed ({len(fm.volcanoes)})")
     sk = gen.generate_learned(profile, model, LearnedQuality.SKETCH)
     check(sk.width == 0 and sk.sketch_walls == m.sketch_walls, "sketch only, same sketch")
     try:

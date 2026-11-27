@@ -1,0 +1,14 @@
+{
+  "description": "Learned map generator golden map with all additions as the template 'learned' sets them (coherence, calm terrain and biomes, lava rock, volcanoes, craters, cracks, debris): 128x128, seed 3, 2 spawns, quality 1 (fast), any thread count. Hash as in mapgen_learned.json.",
+  "profile": "profiles/op2.json",
+  "model": "profiles/op2-net.bin",
+  "template": "learned",
+  "settings": {
+    "width": 128,
+    "height": 128,
+    "spawns": 2
+  },
+  "seed": 3,
+  "quality": 1,
+  "fnv1a64": "394c43ade7da8a3d"
+}

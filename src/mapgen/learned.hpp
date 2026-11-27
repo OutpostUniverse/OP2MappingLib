@@ -63,6 +63,10 @@ struct Sketch {
     Grid<int32_t> ground;    ///< (w/2, h/2): 0 mud, 1 rock, 2 sand, 3 vegetation, 4 other (as mud)
     Grid<int8_t> zones;      ///< (w, h): 1 mountain, 2 plateau, 3 valley, 4 gorge
     MountainPlan plan;       ///< the map's cutout of the mountain plan
+    Mask lava;               ///< (w/2, h/2): lava cores in rock (lava rock)
+    /// Reserved volcano sites (sketch cells of the map): y, x, size 0..2, on lava, room radius.
+    struct Site { int y, x, size; bool lava; int r; };
+    std::vector<Site> volcanoes;
 };
 
 /// Draws the sketch (Python: skizze). Width and height must be multiples of 8.

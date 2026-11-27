@@ -1,12 +1,22 @@
 {
-  "description": "Learned map generator golden map: template 'learned', 64x64, seed 3, 2 spawns, quality 1 (fast), any thread count. Hash the tile grid (standard mapping index per cell, row by row) with FNV-1a 64 over each value's 4 little-endian bytes.",
+  "description": "Learned map generator golden map without the additions of op2-codegen-editor 0.12 (all their settings 0): template 'learned', 64x64, seed 3, 2 spawns, quality 1 (fast), any thread count. Hash the tile grid (standard mapping index per cell, row by row) with FNV-1a 64 over each value's 4 little-endian bytes.",
   "profile": "profiles/op2.json",
   "model": "profiles/op2-net.bin",
   "template": "learned",
   "settings": {
     "width": 64,
     "height": 64,
-    "spawns": 2
+    "spawns": 2,
+    "biome_calm": 0,
+    "coherence": 0,
+    "calm_terrain": 0,
+    "lava_rock": 0,
+    "volcanoes_small": 0,
+    "volcanoes_medium": 0,
+    "volcanoes_large": 0,
+    "craters": 0,
+    "cracks": 0,
+    "debris": 0
   },
   "seed": 3,
   "quality": 1,

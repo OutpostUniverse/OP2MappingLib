@@ -2,6 +2,7 @@
 // finishing touches (Python: mapgen_netz._Maler, _Nacharbeit, karte).
 // Ported from fefi-byte's op2-codegen-editor (MIT, see THIRD-PARTY-NOTICES.md).
 #include "learned.hpp"
+#include "learned_extra.hpp"
 #include "canvas.hpp"
 
 #include <algorithm>
@@ -9,6 +10,7 @@
 #include <map>
 #include <numeric>
 #include <stdexcept>
+#include <string>
 
 namespace om::gen {
 
@@ -17,6 +19,7 @@ namespace {
 constexpr double kPi = 3.14159265358979323846;
 constexpr double kWallBoost = 30.0;    // WAND_VERSTAERKUNG: sketch says wall -> prefer wall tiles
 constexpr double kNorthBoost = 2.0;    // NORD_VERSTAERKUNG: north edges are one cell thick
+constexpr double kNorthBoostShape = 6.0;   // with the large shape (its long cliffs need their north edges)
 constexpr int kSand = 2;
 constexpr int kImpassable1 = 6, kImpassable2 = 1;
 constexpr int kBuildSquare = 7;
@@ -62,9 +65,25 @@ struct Painter {
     Grid<int32_t> sw, sb;     ///< sketch per cell (full resolution)
     nn::Act pos, sketchFeat;
     Mask nah, nord, must;
+    double northBoost = kNorthBoost;
+    double force = 1.0;       ///< kraft: extra pull towards wall tiles while closing gaps
+    // Lava rock (mapgen_netz_fels.Felsmaler): the plan per tile, the vocabulary's
+    // rock/lava/seam tiles, the base patterns, and pair tables without a direct
+    // rock|lava change.
+    bool rock = false;
+    Grid<int8_t> plan;
+    std::vector<int8_t> vkind;
+    std::vector<int> kindIdx[4], partIdx[5];
+    std::vector<Mask> areas;
+    std::vector<uint64_t> bRight, bLeft, bDown, bUp;
+    const std::vector<uint64_t>* tRight;
+    const std::vector<uint64_t>* tLeft;
+    const std::vector<uint64_t>* tDown;
+    const std::vector<uint64_t>* tUp;
 
-    Painter(const LearnedModel& model, const Sketch& sk, nn::Pool& p, const ProgressFn& pr)
-        : m(model), pool(p), progress(pr), h(sk.wall.h * 2), w(sk.wall.w * 2), V(model.vocab), open(model.vocab + 1) {
+    Painter(const LearnedModel& model, const Sketch& sk, const Params& p, nn::Pool& pl, const ProgressFn& pr)
+        : m(model), pool(pl), progress(pr), h(sk.wall.h * 2), w(sk.wall.w * 2), V(model.vocab), open(model.vocab + 1),
+          tRight(&model.right), tLeft(&model.left), tDown(&model.down), tUp(&model.up) {
         sw = Grid<int32_t>(w, h);
         sb = Grid<int32_t>(w, h);
         for (int y = 0; y < h; ++y)
@@ -74,8 +93,38 @@ struct Painter {
             }
         pos = nn::borderPlanes(h, w, 12.f);
         sketchFeat = m.tiles.sketchFeatures(h, w, sw.v.data(), sb.v.data(), pool);
+        if (p.coherence > 0) northBoost = kNorthBoostShape;
+        if (p.lavaRock > 0) setupRock(sk, stream(p.seed, 65));
         masks();
     }
+
+    void setupRock(const Sketch& sk, Rng rng) {
+        rock = true;
+        plan = extra::cellPlan(sk.lava, sk.ground);
+        vkind.resize(size_t(V));
+        for (int i = 0; i < V; ++i) {
+            vkind[size_t(i)] = extra::tileKind(m.vocabMapping[size_t(i)]);
+            kindIdx[vkind[size_t(i)]].push_back(i);
+            for (int n = 0; n < 5; ++n)
+                if (m.vocabMapping[size_t(i)] >= extra::kPatterns[n].first &&
+                    m.vocabMapping[size_t(i)] <= extra::kPatterns[n].last)
+                    partIdx[n].push_back(i);
+        }
+        areas = extra::patternAreas(w, h, rng);
+        // ohne_kante: no direct rock|lava pairs (the originals have 1 % of them).
+        bRight = m.right; bLeft = m.left; bDown = m.down; bUp = m.up;
+        const int W = m.words;
+        auto clear = [&](std::vector<uint64_t>& t, int a, int b) { t[size_t(a) * W + size_t(b) / 64] &= ~(uint64_t(1) << (b % 64)); };
+        for (int a : kindIdx[extra::kRock])
+            for (int b : kindIdx[extra::kLava]) {
+                clear(bRight, a, b); clear(bLeft, b, a); clear(bRight, b, a); clear(bLeft, a, b);
+                clear(bDown, a, b); clear(bUp, b, a); clear(bDown, b, a); clear(bUp, a, b);
+            }
+        tRight = &bRight; tLeft = &bLeft; tDown = &bDown; tUp = &bUp;
+    }
+
+    bool seenRight(int a, int b) const { return ((*tRight)[size_t(a) * m.words + b / 64] >> (b % 64)) & 1; }
+    bool seenDown(int a, int b) const { return ((*tDown)[size_t(a) * m.words + b / 64] >> (b % 64)) & 1; }
 
     void check() const {
         if (progress && !progress(done)) throw Cancelled();
@@ -156,8 +205,20 @@ struct Painter {
             softmax(&logits[size_t(i) * V], V, temperature, p);
             const int c = cells[size_t(i)];
             const double f = (nah.v[size_t(c)] ? 1.0 : .01) * (must.v[size_t(c)] ? kWallBoost : 1.0) *
-                             (nord.v[size_t(c)] ? kNorthBoost : 1.0);
+                             (nord.v[size_t(c)] ? northBoost * force : (must.v[size_t(c)] ? force : 1.0));
             for (int j : m.wallIdx) p[j] *= f;
+            if (rock) {   // Felsmaler.gewichte: tiles after the lava plan and the base patterns
+                const int v = plan.v[size_t(c)];
+                const double fr = v == extra::kLava ? 2e-3 : 1.0;
+                const double fl = (v == extra::kLava || v == extra::kSeam) ? 1.0 : 2e-3;
+                const double fs = v == extra::kSeam ? 6.0 : 2e-3;
+                for (int j : kindIdx[extra::kRock]) p[j] *= fr;
+                for (int j : kindIdx[extra::kLava]) p[j] *= fl;
+                for (int j : kindIdx[extra::kSeam]) p[j] *= fs;
+                for (int n = 0; n < 5; ++n)
+                    if (!areas[size_t(n)].v[size_t(c)])
+                        for (int j : partIdx[n]) p[j] *= .03;
+            }
             double s = 0;
             for (int j = 0; j < V; ++j) s += p[j];
             for (int j = 0; j < V; ++j) p[j] /= s;
@@ -172,10 +233,10 @@ struct Painter {
         auto andRow = [&](const std::vector<uint64_t>& t, int a) {
             for (int k = 0; k < W; ++k) e[size_t(k)] &= t[size_t(a) * W + k];
         };
-        if (x > 0 && g.at(x - 1, y) < V) andRow(m.right, g.at(x - 1, y));
-        if (x < w - 1 && g.at(x + 1, y) < V) andRow(m.left, g.at(x + 1, y));
-        if (y > 0 && g.at(x, y - 1) < V) andRow(m.down, g.at(x, y - 1));
-        if (y < h - 1 && g.at(x, y + 1) < V) andRow(m.up, g.at(x, y + 1));
+        if (x > 0 && g.at(x - 1, y) < V) andRow(*tRight, g.at(x - 1, y));
+        if (x < w - 1 && g.at(x + 1, y) < V) andRow(*tLeft, g.at(x + 1, y));
+        if (y > 0 && g.at(x, y - 1) < V) andRow(*tDown, g.at(x, y - 1));
+        if (y < h - 1 && g.at(x, y + 1) < V) andRow(*tUp, g.at(x, y + 1));
     }
 
     /// fuelle: fills the open cells, certain ones first; reopens dead ends.
@@ -267,8 +328,8 @@ struct Painter {
         Mask b(w, h, 0);
         for (int y = y0; y < y1; ++y)
             for (int x = x0; x < x1; ++x) {
-                if (x + 1 < x1 && !m.seenRight(g.at(x, y), g.at(x + 1, y))) b.at(x, y) = b.at(x + 1, y) = 1;
-                if (y + 1 < y1 && !m.seenDown(g.at(x, y), g.at(x, y + 1))) b.at(x, y) = b.at(x, y + 1) = 1;
+                if (x + 1 < x1 && !seenRight(g.at(x, y), g.at(x + 1, y))) b.at(x, y) = b.at(x + 1, y) = 1;
+                if (y + 1 < y1 && !seenDown(g.at(x, y), g.at(x, y + 1))) b.at(x, y) = b.at(x, y + 1) = 1;
             }
         return b;
     }
@@ -313,6 +374,101 @@ struct Painter {
                 if (wrong(g, x0, y0, x1, y1).count() > before)
                     for (const auto& [c, v] : saved) g.v[size_t(c)] = v;
             }
+        }
+    }
+
+    /// loecher: sketch wall cells without any wall tile, at full size.
+    Mask holes(const Grid<int32_t>& g) const {
+        Mask b(w, h, 0);
+        for (int y = 0; y + 1 < h; y += 2)
+            for (int x = 0; x + 1 < w; x += 2) {
+                if (sw.at(x, y) <= 0) continue;
+                bool any = false;
+                for (int dy = 0; dy < 2; ++dy)
+                    for (int dx = 0; dx < 2; ++dx) any = any || m.vocabWall[size_t(g.at(x + dx, y + dy))];
+                if (!any)
+                    for (int dy = 0; dy < 2; ++dy)
+                        for (int dx = 0; dx < 2; ++dx) b.at(x + dx, y + dy) = 1;
+            }
+        return b;
+    }
+
+    /// luecken_zu: repaints holes in the sketched walls spot by spot; the
+    /// network tends to skip thin north edges, and a long cliff falls apart.
+    void closeGaps(Grid<int32_t>& g, Rng& rng, int times = 4) {
+        for (int k = 0; k < times; ++k) {
+            Mask b = holes(g);
+            if (!b.any()) break;
+            check();
+            Grid<int32_t> labels;
+            const int n = label8(dilate4(b, 2), labels);
+            std::vector<std::vector<int>> spots(size_t(n) + 1);
+            for (size_t i = 0; i < b.v.size(); ++i)
+                if (b.v[i]) spots[size_t(labels.v[i])].push_back(static_cast<int>(i));
+            force = 3.0 * double(1 << k);
+            for (int i = 1; i <= n; ++i) {
+                const auto& z = spots[size_t(i)];
+                if (z.empty()) continue;
+                Mask mm(w, h, 0);
+                int miny = h, minx = w, maxy = 0, maxx = 0;
+                for (int c : z) {
+                    mm.v[size_t(c)] = 1;
+                    miny = std::min(miny, c / w); maxy = std::max(maxy, c / w);
+                    minx = std::min(minx, c % w); maxx = std::max(maxx, c % w);
+                }
+                mm = dilate4(mm, 2);
+                Grid<int32_t> neu = g;
+                for (size_t c = 0; c < mm.v.size(); ++c) if (mm.v[c]) neu.v[c] = open;
+                fill(neu, rng, 4, .9, [&](int c) { return !mm.v[size_t(c)]; }, 10);
+                const int y0 = std::max(miny - 8, 0) / 2 * 2, x0 = std::max(minx - 8, 0) / 2 * 2;
+                const int y1 = std::min(h, maxy + 9), x1 = std::min(w, maxx + 9);
+                auto inside = [&](const Mask& q) {
+                    size_t s = 0;
+                    for (int y = y0; y < y1; ++y)
+                        for (int x = x0; x < x1; ++x) s += q.at(x, y);
+                    return s;
+                };
+                if (inside(holes(neu)) < inside(b) && wrong(neu, x0, y0, x1, y1).count() <= wrong(g, x0, y0, x1, y1).count()) {
+                    g = std::move(neu);
+                    b = holes(g);
+                }
+            }
+            force = 1.0;
+        }
+    }
+
+    /// Felsmaler.grundmuster: lays pure rock and lava tiles in their brush
+    /// pattern, as the original editors did, only where all four neighbours fit.
+    void basePattern(Grid<int32_t>& g, Rng& rng, double keep = .25) {
+        std::vector<int> vocabOf(m.mapCell.size(), -1);
+        for (int i = 0; i < V; ++i) vocabOf[size_t(m.vocabMapping[size_t(i)])] = i;   // last wins, as Python's dict
+        Grid<int32_t> target(w, h, -1);
+        std::vector<uint8_t> skip(size_t(w) * h);
+        for (auto& s : skip) s = rng.uniform() < keep;
+        for (int n = 0; n < 5; ++n) {
+            const extra::Pattern& pt = extra::kPatterns[n];
+            const int8_t want = pt.lava ? extra::kLava : extra::kRock;
+            for (int y = 0; y < h; ++y)
+                for (int x = 0; x < w; ++x) {
+                    const size_t i = size_t(y) * w + x;
+                    if (vkind[size_t(g.v[i])] != want || !areas[size_t(n)].v[i] || skip[i]) continue;
+                    const int t = pt.first + (y % pt.width) * pt.width + x % pt.width;
+                    target.v[i] = size_t(t) < vocabOf.size() ? vocabOf[size_t(t)] : -1;
+                }
+        }
+        for (int round = 0; round < 4; ++round) {
+            const Grid<int32_t> before = g;
+            for (int y = 0; y < h; ++y)
+                for (int x = 0; x < w; ++x) {
+                    const int z = target.at(x, y);
+                    if (z < 0 || z == before.at(x, y) || (y + x) % 2 != round % 2) continue;
+                    bool ok = true;
+                    if (x > 0) ok = ok && seenRight(before.at(x - 1, y), z);
+                    if (x < w - 1) ok = ok && seenRight(z, before.at(x + 1, y));
+                    if (y > 0) ok = ok && seenDown(before.at(x, y - 1), z);
+                    if (y < h - 1) ok = ok && seenDown(z, before.at(x, y + 1));
+                    if (ok) g.at(x, y) = z;
+                }
         }
     }
 
@@ -483,6 +639,8 @@ struct Finisher {
     std::vector<uint8_t> wall, transition, object;
     std::vector<int> pure;                       ///< ground of plain tiles, -1 otherwise (rein)
     std::vector<std::vector<int>> fillTiles;     ///< per ground (fuell)
+    bool lavaRock = false;                       ///< keep rock and lava rock apart
+    int rockGround = -2;
 
     Finisher(const LearnedModel& model, Canvas& canvas, BlendMap& blend, Rng& r)
         : m(model), c(canvas), bm(blend), rng(r), gd(canvas.profile.generator) {
@@ -531,6 +689,19 @@ struct Finisher {
     void groundTile(int x, int y, int ground) {
         if (ground < 0 || size_t(ground) >= fillTiles.size() || fillTiles[size_t(ground)].empty()) return;
         std::vector<int> probe = fillTiles[size_t(ground)];
+        if (lavaRock && ground == rockGround) {   // rock and lava rock do not mix
+            int lava = 0, rk = 0;
+            for (int yy = std::max(0, y - 2); yy < std::min(c.h, y + 3); ++yy)
+                for (int xx = std::max(0, x - 2); xx < std::min(c.w, x + 3); ++xx) {
+                    const int k = extra::tileKind(c.tiles.at(xx, yy));
+                    lava += k == extra::kLava;
+                    rk += k == extra::kRock;
+                }
+            const int8_t want = lava > rk ? extra::kLava : extra::kRock;
+            std::vector<int> same;
+            for (int t : probe) if (extra::tileKind(t) == want) same.push_back(t);
+            if (!same.empty()) probe = std::move(same);
+        }
         shuffle(probe, rng);
         probe.resize(std::min<size_t>(40, probe.size()));
         for (int k : probe)
@@ -712,25 +883,154 @@ struct Finisher {
     }
 };
 
+/// vulkane: stamps the volcanoes on their reserved sites; around a site the
+/// frame's single foreign tiles take the most common base tile. Returns the centres.
+std::vector<Point> stampVolcanoes(const Sketch& sk, Canvas& c, BlendMap& bm, Finisher& fin) {
+    const int w = c.w, h = c.h;
+    Grid<int8_t> kind(w, h);
+    for (size_t i = 0; i < kind.v.size(); ++i) kind.v[i] = extra::tileKind(c.tiles.v[i]);
+    std::vector<Point> out;
+    const char* names[3][2] = {{"rocvolc2", nullptr}, {"rocvolc3", "rocvolc1"}, {"rocvolc4", nullptr}};
+    for (const Sketch::Site& s : sk.volcanoes) {
+        std::vector<const char*> order;
+        for (const char* n : names[s.size]) if (n) order.push_back(n);
+        if (s.size == 1 && !s.lava) std::reverse(order.begin(), order.end());
+        for (const char* name : order) {
+            const Stamp* st = nullptr;
+            for (const Stamp& v : c.profile.generator.volcanoes) if (v.name == name) st = &v;
+            if (!st) continue;
+            const int8_t want = (std::string(name) == "rocvolc3" || std::string(name) == "rocvolc4") ? extra::kLava : extra::kRock;
+            const int bw = st->w, bh = st->h;
+            bool found = false;
+            double bestFit = -1;
+            int bestNear = 0, by = 0, bx = 0;
+            for (int dy = -6; dy <= 6; ++dy)
+                for (int dx = -6; dx <= 6; ++dx) {
+                    const int y0 = 2 * s.y + 1 - bh / 2 + dy, x0 = 2 * s.x + 1 - bw / 2 + dx;
+                    if (y0 < 2 || x0 < 2 || y0 + bh + 2 > h || x0 + bw + 2 > w) continue;
+                    int same = 0, all = 0;
+                    bool blocked = false;
+                    for (int y = y0 - 1; y < y0 + bh + 1; ++y)
+                        for (int x = x0 - 1; x < x0 + bw + 1; ++x) {
+                            same += kind.at(x, y) == want;
+                            all += 1;
+                            blocked = blocked || fin.wall[size_t(c.tiles.at(x, y))];
+                        }
+                    const double fit = std::nearbyint(100.0 * same / all) / 100.0;
+                    if (blocked || double(same) / all < .85) continue;
+                    const int near = -(std::abs(dy) + std::abs(dx));
+                    if (!found || fit > bestFit || (fit == bestFit && near > bestNear)) {
+                        found = true; bestFit = fit; bestNear = near; by = y0; bx = x0;
+                    }
+                }
+            if (!found) continue;
+            // The most common base tile of that kind on the map.
+            std::map<int, int> count;
+            for (size_t i = 0; i < kind.v.size(); ++i) if (kind.v[i] == want) count[c.tiles.v[i]] += 1;
+            int base = -1, most = 0;
+            for (const auto& [t, n] : count) if (n > most) { most = n; base = t; }
+            if (base >= 0)
+                for (int y = by - 1; y < by + bh + 1; ++y)
+                    for (int x = bx - 1; x < bx + bw + 1; ++x)
+                        if (kind.at(x, y) != want) {
+                            fin.put(x, y, base);
+                            kind.at(x, y) = want;
+                        }
+            if (!placeStamp(c, bm, *st, bx, by)) continue;
+            for (int y = by; y < by + bh; ++y)
+                for (int x = bx; x < bx + bw; ++x) kind.at(x, y) = extra::kOther;
+            out.emplace_back(bx + bw / 2, by + bh / 2);
+            break;
+        }
+    }
+    return out;
+}
+
+/// deko.verzieren: craters, cracks and debris from the game's tile groups,
+/// each on its own ground and only where its seam fits; debris comes as crash sites.
+void decorate(Canvas& c, BlendMap& bm, const LearnedModel& m, const Params& p, Mask& blocked, Rng& rng) {
+    const int w = c.w, h = c.h;
+    const char* kinds[3] = {"crater", "crack", "debris"};
+    const double density[3] = {36, 16, 7};
+    const double strength[3] = {p.craters, p.cracks, p.debris};
+    const int rockGround = c.profile.findGround("roc");
+    auto place = [&](const Stamp& s, int x, int y) {
+        if (y < 1 || x < 1 || y + s.h + 1 > h || x + s.w + 1 > w) return false;
+        for (int yy = y - 1; yy < y + s.h + 1; ++yy)
+            for (int xx = x - 1; xx < x + s.w + 1; ++xx) {
+                if (blocked.at(xx, yy)) return false;
+                const int t = c.tiles.at(xx, yy);
+                if (s.ground == rockGround ? extra::tileKind(t) != extra::kRock : m.mapGround[size_t(t)] != s.ground) return false;
+            }
+        if (!seamFits(c, s, x, y) || !placeStamp(c, bm, s, x, y)) return false;
+        for (int yy = y; yy < y + s.h; ++yy)
+            for (int xx = x; xx < x + s.w; ++xx) blocked.at(xx, yy) = 1;
+        return true;
+    };
+    for (int k = 0; k < 3; ++k) {
+        std::vector<const Stamp*> list;
+        for (const Stamp& s : c.profile.generator.decorations) if (s.kind == kinds[k]) list.push_back(&s);
+        const int target = static_cast<int>(std::nearbyint(density[k] * std::max(0.0, strength[k]) * w * h / (128.0 * 128.0)));
+        int n = 0;
+        for (int tries = 0; tries < target * 40 && n < target && !list.empty(); ++tries) {
+            if (k == 2) {
+                // A crash site: a centre with pieces around it.
+                if (w < 17 || h < 17) break;
+                const int cy = static_cast<int>(rng.integers(8, h - 8)), cx = static_cast<int>(rng.integers(8, w - 8));
+                const int fam = m.mapGround[size_t(c.tiles.at(cx, cy))];
+                std::vector<const Stamp*> parts;
+                for (const Stamp* s : list) if (fam >= 0 && s->ground == fam) parts.push_back(s);
+                if (parts.empty()) continue;
+                int placed = 0;
+                const int pieces = static_cast<int>(rng.integers(4, 9)) * 6;
+                for (int q = 0; q < pieces; ++q) {
+                    const Stamp& s = *parts[size_t(rng.integers(0, int64_t(parts.size())))];
+                    const int y = cy + static_cast<int>(rng.normal() * 3.5) - s.h / 2;
+                    const int x = cx + static_cast<int>(rng.normal() * 3.5) - s.w / 2;
+                    placed += place(s, x, y);
+                    int busy = 0, all = 0;
+                    for (int yy = std::max(0, cy - 6); yy < std::min(h, cy + 7); ++yy)
+                        for (int xx = std::max(0, cx - 6); xx < std::min(w, cx + 7); ++xx) { busy += blocked.at(xx, yy); ++all; }
+                    if (busy > .35 * all) break;
+                }
+                n += placed >= 2;
+            } else {
+                const Stamp& s = *list[size_t(rng.integers(0, int64_t(list.size())))];
+                if (h - s.h - 1 <= 1 || w - s.w - 1 <= 1) continue;
+                const int y = static_cast<int>(rng.integers(1, h - s.h - 1)), x = static_cast<int>(rng.integers(1, w - s.w - 1));
+                n += place(s, x, y);
+            }
+        }
+    }
+}
+
 }  // namespace
 
 Result paintMap(const Profile& profile, const LearnedModel& m, const Params& p, const Sketch& sk, int quality,
                 nn::Pool& pool, const ProgressFn& progress) {
     Rng rng = stream(p.seed, 62);
-    Painter painter(m, sk, pool, progress);
+    Painter painter(m, sk, p, pool, progress);
     const int w = painter.w, h = painter.h;
     Grid<int32_t> g(w, h, painter.open);
     painter.fill(g, rng, quality >= 2 ? 24 : 6, .95, [](int) { return false; }, 20, 0.0, .6);
     painter.done = .6;
     painter.patch(g, rng);
+    if (p.coherence > 0) painter.closeGaps(g, rng);
     painter.done = .75;
-    painter.dropScraps(g, rng);
-    Mask mountain(w, h);
-    for (size_t i = 0; i < mountain.v.size(); ++i) mountain.v[i] = sk.zones.v[i] == 1;
-    painter.terraces(g, mountain, std::clamp(p.mountainDensity, 0.0, 1.0), rng);
+    const double density = std::clamp(p.mountainDensity, 0.0, 1.0);
+    const int rest = p.coherence > 0 ? 24 : 10;
+    painter.dropScraps(g, rng, rest);
+    // With the large shape the mountain already has terraces; single steps only
+    // if it is to become fully tight.
+    if (p.coherence <= 0 || density >= .8) {
+        Mask mountain(w, h);
+        for (size_t i = 0; i < mountain.v.size(); ++i) mountain.v[i] = sk.zones.v[i] == 1;
+        painter.terraces(g, mountain, density, rng);
+    }
     painter.done = .88;
-    painter.dropScraps(g, rng);
+    painter.dropScraps(g, rng, rest);
     painter.patch(g, rng, 8);
+    if (painter.rock) painter.basePattern(g, rng);
     painter.done = .95;
     painter.check();
 
@@ -745,6 +1045,8 @@ Result paintMap(const Profile& profile, const LearnedModel& m, const Params& p, 
     std::vector<uint16_t> init(c.tiles.v.begin(), c.tiles.v.end());
     BlendMap bm(profile, w, h, table.data(), static_cast<int>(table.size()), init.data());
     Finisher fin(m, c, bm, rng);
+    fin.lavaRock = p.lavaRock > 0;
+    fin.rockGround = profile.findGround("roc");
     fin.specks();
     const double goal = p.details * .06;
     const double share = double(fin.objectCount()) / double(w * h);
@@ -764,8 +1066,29 @@ Result paintMap(const Profile& profile, const LearnedModel& m, const Params& p, 
         for (size_t i = 0; i < blocked.v.size(); ++i) blocked.v[i] |= sk.zones.v[i] == 3 || sk.zones.v[i] == 4;
         scatterDetails(c, bm, fam, rng, more, blocked, Sym::None);
     }
+    // Volcanoes on their reserved sites, then craters, cracks and debris.
+    const std::vector<Point> volcanoes = stampVolcanoes(sk, c, bm, fin);
+    {
+        Mask wallNear(w, h);
+        for (size_t i = 0; i < wallNear.v.size(); ++i) wallNear.v[i] = fin.wall[size_t(c.tiles.v[i])];
+        Mask blocked = dilate4(wallNear, 1);
+        const Mask obj = fin.objectMask();
+        for (size_t i = 0; i < blocked.v.size(); ++i) blocked.v[i] |= obj.v[i];
+        for (const Point& v : volcanoes)
+            for (int y = std::max(0, v.second - 8); y < std::min(h, v.second + 9); ++y)
+                for (int x = std::max(0, v.first - 8); x < std::min(w, v.first + 9); ++x) blocked.at(x, y) = 1;
+        Rng r69 = stream(p.seed, 69);
+        decorate(c, bm, m, p, blocked, r69);
+    }
 
     Result r;
+    for (const Point& v : volcanoes) {
+        std::vector<Point> zone;
+        for (const Point& q : lavaZone(v, w, h, p.lavaZoneTiles, rng))
+            if (!fin.wall[size_t(c.tiles.at(q.first, q.second))]) zone.push_back(q);
+        if (!zone.empty()) r.lavaZones.push_back(std::move(zone));
+    }
+    r.volcanoes = volcanoes;
     r.tiles = c.tiles;
     r.cells = Grid<uint8_t>(w, h);
     for (size_t i = 0; i < r.cells.v.size(); ++i) r.cells.v[i] = static_cast<uint8_t>(c.cells.v[i] & 31);

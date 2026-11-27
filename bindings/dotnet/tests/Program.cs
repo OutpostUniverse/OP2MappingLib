@@ -185,6 +185,9 @@ internal static class Program
                 gen.Set("width", 64);
                 gen.Set("height", 64);
                 gen.Set("spawns", 2);
+                foreach (string k in new[] { "biome_calm", "coherence", "calm_terrain", "lava_rock", "volcanoes_small",
+                                             "volcanoes_medium", "volcanoes_large", "craters", "cracks", "debris" })
+                    gen.Set(k, 0);   // the additions off: the golden map of tests/vectors/mapgen_learned.json
                 gen.Seed = 3;
                 double last = 0;
                 GeneratedMap map = gen.GenerateLearned(profile, model, LearnedQuality.Fast, 1, f => { last = f; return true; });

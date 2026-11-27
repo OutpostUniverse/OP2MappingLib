@@ -785,7 +785,11 @@ class MapGenerator:
         spawn_clearance, cliffs, ramps, volcanoes, lava_zone_tiles, smooth,
         vegetation_spacing, min_biome, details, landscape, rivers; mountains,
         mountain_density, gorges, valleys, plateaus, mountain_spread,
-        world_cutout, learned_rocks (see op2maplib.h, om_mapgen_set).
+        world_cutout, learned_rocks; learned generator only: biome_calm,
+        coherence, calm_terrain, lava_rock, volcanoes_small, volcanoes_medium,
+        volcanoes_large, craters, cracks, debris, gradient,
+        gradient_ground_start, gradient_ground_end, gradient_terrain_start,
+        gradient_terrain_end (see op2maplib.h, om_mapgen_set).
 
         Raises:
             KeyError: unknown key.

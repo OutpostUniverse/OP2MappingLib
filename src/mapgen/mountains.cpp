@@ -280,6 +280,10 @@ void planRanges(MountainPlan& plan, const Params& p, Rng& rng, const Mask& freeC
             const Chain& k = chains[size_t(nearest.at(x, y))];
             tilt.at(x, y) = (std::cos(k.tilt) * (x - k.cx) + std::sin(k.tilt) * (y - k.cy)) / 60.;
         }
+    // Gradient (learned generator): mountains move towards the rugged side.
+    Floats rough;
+    if (gradientTerrain(p, w, h, R, rough))
+        for (size_t i = 0; i < f.v.size(); ++i) f.v[i] += 1.6 * (rough.v[i] - .5);
     if (sym != Sym::None) {
         applySymmetry(f, sym);
         applySymmetry(tilt, sym);

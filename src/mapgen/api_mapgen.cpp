@@ -53,6 +53,21 @@ Field field(Params& p, const char* key) {
     if (k == "mountain_spread") return {nullptr, nullptr, &p.mountainSpread};
     if (k == "world_cutout") return {nullptr, nullptr, &p.worldCutout};
     if (k == "learned_rocks") return {nullptr, nullptr, &p.learnedRocks};
+    if (k == "biome_calm") return {&p.biomeCalm};
+    if (k == "coherence") return {&p.coherence};
+    if (k == "calm_terrain") return {&p.calmTerrain};
+    if (k == "lava_rock") return {&p.lavaRock};
+    if (k == "volcanoes_small") return {nullptr, &p.volcanoSizes[0]};
+    if (k == "volcanoes_medium") return {nullptr, &p.volcanoSizes[1]};
+    if (k == "volcanoes_large") return {nullptr, &p.volcanoSizes[2]};
+    if (k == "craters") return {&p.craters};
+    if (k == "cracks") return {&p.cracks};
+    if (k == "debris") return {&p.debris};
+    if (k == "gradient") return {nullptr, &p.gradient};
+    if (k == "gradient_ground_start") return {nullptr, &p.gradientGround[0]};
+    if (k == "gradient_ground_end") return {nullptr, &p.gradientGround[1]};
+    if (k == "gradient_terrain_start") return {&p.gradientTerrain[0]};
+    if (k == "gradient_terrain_end") return {&p.gradientTerrain[1]};
     return {};
 }
 

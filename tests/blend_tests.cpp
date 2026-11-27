@@ -532,6 +532,11 @@ int main(int argc, char** argv) {
         om_mapgen_set(s, "height", 64);
         om_mapgen_set(s, "spawns", 2);
         om_mapgen_set_seed(s, 3);
+        // The additions (coherence, calm biomes and terrain, lava rock, volcano
+        // sizes, craters, cracks, debris) all off: the generator as before.
+        const char* additions[] = {"biome_calm", "coherence", "calm_terrain", "lava_rock", "volcanoes_small",
+                                   "volcanoes_medium", "volcanoes_large", "craters", "cracks", "debris"};
+        for (const char* k : additions) CHECK(om_mapgen_set(s, k, 0) == 0);
         // Golden map (tests/vectors/mapgen_learned.json), the same for any thread count.
         std::string hashes[2];
         for (int i = 0; i < 2 && m; ++i) {
@@ -555,6 +560,60 @@ int main(int argc, char** argv) {
         }
         CHECK(hashes[0] == hashes[1]);
         CHECK(hashes[0] == "05a14ace030553ef");
+        // The template with all additions (tests/vectors/mapgen_learned_full.json), 128 x 128.
+        {
+            om_mapgen_settings* f = om_mapgen_settings_create("learned");
+            CHECK(om_mapgen_get(f, "coherence") == 0.6 && om_mapgen_get(f, "volcanoes_medium") == 1);
+            om_mapgen_set(f, "width", 128);
+            om_mapgen_set(f, "height", 128);
+            om_mapgen_set(f, "spawns", 2);
+            om_mapgen_set_seed(f, 3);
+            std::string full[2];
+            for (int i = 0; i < 2 && m; ++i) {
+                om_mapgen_result* r = om_mapgen_generate_learned(p, m, f, OM_LEARNED_FAST, i == 0 ? 1 : 8, nullptr,
+                                                                 nullptr, err, sizeof err);
+                CHECK(r != nullptr);
+                if (!r) continue;
+                std::vector<uint16_t> t(128 * 128);
+                om_mapgen_get_tiles(r, t.data(), 128 * 128);
+                char hx[17];
+                std::snprintf(hx, sizeof hx, "%016llx",
+                              static_cast<unsigned long long>(hashGrid(std::vector<int>(t.begin(), t.end()))));
+                full[i] = hx;
+                CHECK(om_mapgen_stat(r, "connected") == 1.0);
+                const int volcanoes = om_mapgen_point_count(r, OM_MAPGEN_VOLCANOES);
+                CHECK(volcanoes >= 1 && om_mapgen_lava_zone_count(r) >= 1);
+                if (i == 0)
+                    std::printf("  all additions: passable %.3f, plateau %.3f, %d volcanoes, hash %s\n",
+                                om_mapgen_stat(r, "passable"), om_mapgen_stat(r, "plateau"), volcanoes, hx);
+                om_mapgen_result_free(r);
+            }
+            CHECK(full[0] == full[1]);
+            CHECK(full[0] == "394c43ade7da8a3d");
+            // A gradient: flat sand in the north, rugged in the south.
+            om_mapgen_set(f, "gradient", 1);
+            om_mapgen_set(f, "gradient_ground_start", 2);
+            om_mapgen_set(f, "gradient_terrain_start", 0.05);
+            om_mapgen_set(f, "gradient_terrain_end", 0.95);
+            om_mapgen_result* r = m ? om_mapgen_generate_learned(p, m, f, OM_LEARNED_FAST, 0, nullptr, nullptr, err, sizeof err)
+                                    : nullptr;
+            CHECK(r != nullptr);
+            if (r) {
+                std::vector<uint8_t> cells(128 * 128);
+                om_mapgen_get_cell_types(r, cells.data(), 128 * 128);
+                int north = 0, south = 0;
+                for (int y = 0; y < 128; ++y)
+                    for (int x = 0; x < 128; ++x) {
+                        const uint8_t c = cells[size_t(y) * 128 + x];
+                        const int cliff = c == 8 || c == 9 || c == 10;
+                        (y < 32 ? north : y >= 96 ? south : north) += y < 32 || y >= 96 ? cliff : 0;
+                    }
+                std::printf("  gradient: cliff cells north %d, south %d\n", north, south);
+                CHECK(north < south);
+                om_mapgen_result_free(r);
+            }
+            om_mapgen_settings_free(f);
+        }
         // Sketch only: no tiles, a sketch with walls.
         om_mapgen_result* r = om_mapgen_generate_learned(p, m, s, OM_LEARNED_SKETCH, 0, nullptr, nullptr, err, sizeof err);
         CHECK(r != nullptr && om_mapgen_width(r) == 0);

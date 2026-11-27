@@ -39,6 +39,7 @@ set(OP2MAPLIB_SOURCES
     src/mapgen/net.cpp
     src/mapgen/learned_sketch.cpp
     src/mapgen/learned_tiles.cpp
+    src/mapgen/learned_extra.cpp
     src/mapgen/api_learned.cpp
     src/mapgen/paths.cpp
     src/mapgen/relief.cpp

@@ -408,6 +408,38 @@ OM_API void OM_CALL om_mapgen_settings_free(om_mapgen_settings* settings);
  *                           mountains always do this)
  *   learned_rocks (1)       learned generator: rocks and craters where walls alone
  *                           leave building ground in mountains and gorges
+ * Learned generator only (all 0 = as in library versions before them; the
+ * template "learned" sets the values in brackets):
+ *   coherence (0.6)         height plan of the whole map: uplands and basins
+ *                           whose rims become long, stepped cliffs, nested
+ *                           terraces in mountains, small closed hills; spreads
+ *                           the mountains over the whole world
+ *   calm_terrain (0.5)      fewer, longer cliffs, larger uplands, fewer terraces
+ *                           and hills (only with coherence)
+ *   biome_calm (0.5)        merges grounds into larger areas; walls are barriers,
+ *                           so grounds prefer to change at cliffs
+ *   lava_rock (0.5)         dark lava cores in rock areas, with transition tiles
+ *                           and the rock tiles' brush patterns (0.5 = as the
+ *                           original maps, 1 = more often and larger)
+ *   volcanoes_small (1), volcanoes_medium (1), volcanoes_large (0)
+ *                           volcanoes per size, each on a site reserved in the
+ *                           sketch (rock or a lava core), with a lava-possible
+ *                           zone of lava_zone_tiles cells
+ *   craters (0.3), cracks (0.3), debris (0.15)
+ *                           the game's tile groups on matching ground: impact
+ *                           craters on dirt and sand, long cracks in rock,
+ *                           crash sites (wreckage, rubble, burn marks); 1 = about
+ *                           36 craters, 16 cracks, 7 crash sites per 128x128
+ *   gradient (0)            ground and terrain change across the map: 0 off,
+ *                           1 north->south, 2 south->north, 3 west->east,
+ *                           4 east->west, 5 northwest->southeast, 6 southeast->
+ *                           northwest, 7 northeast->southwest, 8 southwest->
+ *                           northeast, 9 centre->edge, 10 edge->centre
+ *   gradient_ground_start (-1), gradient_ground_end (-1)
+ *                           ground at that end: -1 the mix, 0 mud, 1 rock, 2 sand
+ *   gradient_terrain_start (0.5), gradient_terrain_end (0.5)
+ *                           terrain at that end: 0 flat .. 0.5 as usual .. 1
+ *                           rugged (mountains, uplands and basins move there)
  * Mountains and plateaus are planned on a world 32 cells larger on every side
  * and cut out, so their walls run off the map edge as in the original maps.
  * The seed has its own setter (64 bits do not fit a double exactly).
@@ -502,8 +534,9 @@ OM_API int OM_CALL om_mapgen_feature_report(const om_mapgen_result* result, int 
 /* inference code (CPU, no dependencies), the same on every platform and for */
 /* any thread count. The network file for the Outpost 2 profile ships as     */
 /* profiles/op2-net.bin. Uses the same settings as om_mapgen_generate         */
-/* (template "learned" for suggestions); features, volcanoes, landscape mode  */
-/* and roughness are not used. Width and height must be multiples of 8.      */
+/* (template "learned" for suggestions, see om_mapgen_set for the settings   */
+/* only it uses); features, "volcanoes" (use the per-size keys), landscape   */
+/* mode and roughness are not used. Width and height must be multiples of 8. */
 
 /** The learned generator's networks and tile tables (profiles/op2-net.bin). */
 typedef struct om_mapgen_model om_mapgen_model;

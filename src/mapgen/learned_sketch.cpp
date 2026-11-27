@@ -2,11 +2,13 @@
 // mapgen_netz.skizze and mapgen_netz_waende.py).
 // Ported from fefi-byte's op2-codegen-editor (MIT, see THIRD-PARTY-NOTICES.md).
 #include "learned.hpp"
+#include "learned_extra.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <limits>
 #include <map>
+#include <numeric>
 #include <queue>
 #include <stdexcept>
 #include <tuple>
@@ -188,7 +190,7 @@ void shuffle(std::vector<T>& v, Rng& rng) {
 // ---------------------------------------------------------------------------
 // Zones
 
-/// _zonen: zones on the larger world (1 mountain, 2 plateau, 3 valley, 4 gorge).
+/// _zonen: zones on the larger world (1 mountain, 2 plateau, 3 valley, 4 gorge), from the mountain plan.
 Grid<int8_t> worldZones(const Params& p, const MountainPlan& plan) {
     const int R = kWorldMargin, W = p.width + 2 * R, H = p.height + 2 * R;
     Grid<int8_t> z(W, H, 0);
@@ -199,26 +201,7 @@ Grid<int8_t> worldZones(const Params& p, const MountainPlan& plan) {
     for (const Cut& e : plan.gorges) set(e.sole, 4);
     for (const Mask& m : plan.plateaus) set(m, 2);
     if (!plan.terraces.empty()) set(plan.terraces[0], 1);
-    Rng rng = stream(p.seed, 61);
-    for (Placement e : featureLayout(p, rng)) {
-        e.x += R;
-        e.y += R;
-        for (auto& q : e.path) { q.first += R; q.second += R; }
-        const Mask m = featureMask(e, W, H);
-        switch (e.feat.kind) {
-        case FeatKind::Mountain: set(m, 1); break;
-        case FeatKind::Plateau:
-        case FeatKind::Clearing: set(m, 2); break;
-        case FeatKind::Valley:
-            set(featureMask(e, W, H, 5), 1);
-            set(m, 3);
-            break;
-        case FeatKind::Choke:
-            set(m, 4);
-            set(barrier(W, H, e.path, static_cast<int>(e.path.size() / 2), std::max(2, e.width / 2), rng), 1);
-            break;
-        }
-    }
+    // Features are not used: the editor's learned template hides them (op2-codegen-editor 0.12).
     if (p.symmetry != Sym::None) mirrorSketch(z, p.symmetry, false);
     return z;
 }
@@ -296,10 +279,16 @@ Grid<int32_t> mountainGround(const Grid<int32_t>& zone, Rng& rng) {
 std::pair<Grid<int32_t>, Grid<int32_t>> drawFromNet(const LearnedModel& m, const Grid<int32_t>& zone,
                                                     const Grid<int32_t>& ground0, const double* target, Rng& rng,
                                                     int rounds, nn::Pool& pool, const ProgressFn& progress,
+                                                    const Grid<int32_t>* wall0 = nullptr,
+                                                    const std::vector<Floats>* bias0 = nullptr,
                                                     double temperature = .94, double zoneForce = .7) {
     const int h = zone.h, w = zone.w;
     const size_t P = size_t(h) * w;
-    Grid<int32_t> wall(w, h, 9), ground = ground0, none(w, h, 0);
+    // wall0: fixed walls (1..8) and open cells (9) from the large shape;
+    // bias0: per ground a bias per cell (the gradient).
+    Grid<int32_t> wall = wall0 ? *wall0 : Grid<int32_t>(w, h, 9), ground = ground0, none(w, h, 0);
+    std::vector<uint8_t> fixed(P);
+    for (size_t i = 0; i < P; ++i) fixed[i] = wall.v[i] < 9;
     std::vector<double> pw(P * 9), pb(P * 5);
     nn::Act lw, lb, lw0, lb0;
 
@@ -325,7 +314,8 @@ std::pair<Grid<int32_t>, Grid<int32_t>> drawFromNet(const LearnedModel& m, const
                 const float v = lw.ch(k)[i];
                 a[k] = static_cast<float>(v + zoneForce * (double(v) - double(lw0.ch(k)[i])));
             }
-            for (int k = 0; k < 5; ++k) b[k] = static_cast<float>(double(lb.ch(k)[i]) + bias[k]);
+            for (int k = 0; k < 5; ++k)
+                b[k] = static_cast<float>(double(lb.ch(k)[i]) + bias[k] + (bias0 ? (*bias0)[size_t(k)].v[i] : 0.0));
             softmax(a, 9, temperature, &pw[i * 9]);
             softmax(b, 5, 1.0, &pb[i * 5]);
         }
@@ -359,7 +349,8 @@ std::pair<Grid<int32_t>, Grid<int32_t>> drawFromNet(const LearnedModel& m, const
     };
 
     std::vector<int> openW, openB;
-    for (int i = 0; i < static_cast<int>(P); ++i) openW.push_back(i);
+    for (int i = 0; i < static_cast<int>(P); ++i)
+        if (!fixed[size_t(i)]) openW.push_back(i);
     for (int y = 0; y < h / 2; ++y)
         for (int x = 0; x < w / 2; ++x)
             if (ground.at(2 * x, 2 * y) == 5) openB.push_back(y * (w / 2) + x);
@@ -380,7 +371,7 @@ std::pair<Grid<int32_t>, Grid<int32_t>> drawFromNet(const LearnedModel& m, const
     // One more pass over an eighth of the cells, now with all neighbours known.
     std::vector<int> again;
     for (int i = 0; i < static_cast<int>(P); ++i)
-        if (rng.uniform() < .12) again.push_back(i);
+        if (rng.uniform() < .12 && !fixed[size_t(i)]) again.push_back(i);
     for (int i : again) wall.v[size_t(i)] = 9;
     place(again, {});
     return {wall, ground};
@@ -690,13 +681,16 @@ Grid<int32_t> oneGroundPerWall(const Grid<int32_t>& wv, const Grid<int32_t>& gro
 
 }  // namespace
 
-Sketch drawSketch(const LearnedModel& m, const Params& p, nn::Pool& pool, const ProgressFn& progress) {
-    if (p.width % 8 || p.height % 8) throw std::runtime_error("the learned generator needs map sizes that are multiples of 8");
+Sketch drawSketch(const LearnedModel& m, const Params& p0, nn::Pool& pool, const ProgressFn& progress) {
+    if (p0.width % 8 || p0.height % 8) throw std::runtime_error("the learned generator needs map sizes that are multiples of 8");
+    // With the large shape, mountains are spread over the whole world (Python: _ketten_verteilt).
+    Params p = p0;
+    if (p.coherence > 0) p.mountainSpread = true;
     Rng rng = stream(p.seed, 60);
     const MountainPlan world = planWorld(p, Mask());
     const Grid<int8_t> z = worldZones(p, world);
-    const Grid<int32_t> raster = zoneRaster(z, p, rng);
-    const Grid<int32_t> ground0 = mountainGround(raster, rng);
+    Grid<int32_t> raster = zoneRaster(z, p, rng);
+    Grid<int32_t> ground0 = mountainGround(raster, rng);
     // Mix sliders -> wanted share per ground (mud, rock, sand, vegetation; no snow).
     double target[5] = {0, 0, 0, 0, 0}, sum = 0;
     const char* ids[4] = {"mud", "roc", "san", "veg"};
@@ -711,17 +705,123 @@ Sketch drawSketch(const LearnedModel& m, const Params& p, nn::Pool& pool, const 
     }
     const bool small = p.width * p.height <= 128 * 128;
     const int R = kWorldMargin / 2, sh = raster.h, sw = raster.w;
-    int tightCells = 0;
+    const double calmT = std::clamp(p.calmTerrain, 0.0, 1.0);
+    const double area = double(p.width) * p.height / 4;
+
+    // Gradient on the sketch raster: a preference per ground and cell, the terrain per cell.
+    Floats u, rough;
+    std::vector<Floats> pref, bias;
+    const bool gradient = gradientField(p, 2 * sw, 2 * sh, kWorldMargin, u);
+    if (gradient) {
+        Floats full;
+        gradientTerrain(p, 2 * sw, 2 * sh, kWorldMargin, full);
+        Floats uu(sw, sh);
+        rough = Floats(sw, sh);
+        for (int y = 0; y < sh; ++y)
+            for (int x = 0; x < sw; ++x) {
+                uu.at(x, y) = u.at(2 * x, 2 * y);
+                rough.at(x, y) = full.at(2 * x, 2 * y);
+            }
+        double base[5];
+        double bsum = 0;
+        for (int k = 0; k < 5; ++k) bsum += kGroundShare[k];
+        for (int k = 0; k < 5; ++k) base[k] = want ? target[k] : kGroundShare[k] / bsum;
+        double ends[2][5];
+        for (int e = 0; e < 2; ++e)
+            for (int k = 0; k < 5; ++k) {
+                const int g = p.gradientGround[e];
+                ends[e][k] = (g >= 0 && g < 4) ? .2 * base[k] + (k == g ? .8 : 0.0) : base[k];
+            }
+        pref.assign(5, Floats(sw, sh));
+        for (int k = 0; k < 5; ++k) {
+            double mean = 0;
+            for (size_t i = 0; i < uu.v.size(); ++i) {
+                pref[size_t(k)].v[i] = (1 - uu.v[i]) * ends[0][k] + uu.v[i] * ends[1][k];
+                mean += pref[size_t(k)].v[i];
+            }
+            target[k] = mean / double(uu.v.size());
+        }
+        want = target;
+        bias.assign(5, Floats(sw, sh));
+        for (int k = 0; k < 5; ++k)
+            for (size_t i = 0; i < uu.v.size(); ++i)
+                bias[size_t(k)].v[i] = static_cast<float>(1.2 * nn::detLog((pref[size_t(k)].v[i] + .004) / (target[k] + .004)));
+    }
+
+    // Large shape: its contours go into the network as fixed walls.
+    Rng shapeRng = stream(p.seed, 66);
+    Grid<int32_t> lines = extra::largeShape(raster, std::clamp(p.coherence, 0.0, 1.0), shapeRng,
+                                            std::clamp(p.mountainDensity, 0.0, 1.0), calmT, gradient ? &rough : nullptr);
+    auto isLine = [&](size_t i) { return lines.v[i] < 9; };
+    if (gradient) {
+        // Flat side: fewer large-shape lines and fewer of the network's own cliffs.
+        Rng r70 = stream(p.seed, 70);
+        const Floats loose = extra::softNoise(sw, sh, r70, {{5, 1.0}});
+        std::vector<int> order(loose.v.size());
+        std::iota(order.begin(), order.end(), 0);
+        std::stable_sort(order.begin(), order.end(), [&](int a, int b) { return loose.v[size_t(a)] < loose.v[size_t(b)]; });
+        Floats rank(sw, sh);
+        for (size_t k = 0; k < order.size(); ++k) rank.v[size_t(order[k])] = double(k) / double(order.size());
+        for (size_t i = 0; i < lines.v.size(); ++i) {
+            const double flat = std::clamp((.5 - rough.v[i]) * 2, 0.0, 1.0);
+            if (rank.v[i] < flat && isLine(i)) lines.v[i] = 9;
+            if (raster.v[i] == 0 && rank.v[i] < 1.1 * flat) raster.v[i] = 2;
+        }
+        lines = extra::dropShortWalls(lines, 9, 9);
+    }
+    Mask lineMask(sw, sh);
+    for (size_t i = 0; i < lineMask.v.size(); ++i) lineMask.v[i] = isLine(i);
+    {
+        const Mask near1 = dilate4(lineMask, 1);
+        for (size_t i = 0; i < raster.v.size(); ++i)
+            if (near1.v[i] && raster.v[i] == 2) raster.v[i] = 0;
+    }
+    if (calmT > 0 && lineMask.any()) {
+        // Away from the large lines the network draws many short cliffs of its own;
+        // calm terrain leaves more of that open. Inside mountains the terraces give the shape.
+        const Mask near5 = dilate4(lineMask, 5), near3 = dilate4(lineMask, 3);
+        Rng r67 = stream(p.seed, 67);
+        const Floats pick = extra::softNoise(sw, sh, r67, {{6, 1.0}});
+        const double q1 = extra::quantileOf(pick.v, .9 * calmT);
+        for (size_t i = 0; i < raster.v.size(); ++i)
+            if (!near5.v[i] && raster.v[i] == 0 && pick.v[i] < q1) raster.v[i] = 2;
+        const double q2 = extra::quantileOf(pick.v, std::min(1.0, 1.2 * calmT));
+        for (size_t i = 0; i < raster.v.size(); ++i)
+            if (raster.v[i] == 1 && !near3.v[i] && pick.v[i] < q2) raster.v[i] = 2;
+    }
+    int tightCells = 0, lineCells = 0;
     for (int y = R; y < sh - R; ++y)
-        for (int x = R; x < sw - R; ++x) tightCells += raster.at(x, y) == 1;
+        for (int x = R; x < sw - R; ++x) {
+            tightCells += raster.at(x, y) == 1;
+            lineCells += lines.at(x, y) < 9;
+        }
     const double mapCells = double(sh - 2 * R) * (sw - 2 * R);
-    const double goal = .035 + .20 * p.cliffs + .3 * tightCells / mapCells;
+    const double goal = .035 + .20 * p.cliffs + .3 * tightCells / mapCells + .9 * lineCells / mapCells;
+    const Grid<int32_t>* fixedWalls = lineMask.any() ? &lines : nullptr;
+    const std::vector<Floats>* gBias = gradient ? &bias : nullptr;
+
+    const double calmB = std::clamp(p.biomeCalm, 0.0, 1.0);
+    if (calmB > 0) {
+        // Coarse to fine: a draft, the calm areas from it, then walls drawn to match.
+        auto [dw, dg] = drawFromNet(m, raster, ground0, want, rng, 10, pool, progress, fixedWalls, gBias);
+        dw = tidyWalls(dw, raster, rng);
+        Rng r63 = stream(p.seed, 63);
+        std::vector<Floats> pref4;
+        if (gradient) pref4.assign(pref.begin(), pref.begin() + 4);
+        Grid<int32_t> land = extra::calmBiomes(dw, dg, calmB, r63, gradient ? &pref4 : nullptr);
+        for (size_t i = 0; i < land.v.size(); ++i)
+            if (ground0.v[i] < 5) land.v[i] = ground0.v[i];
+        land = extra::dropSmallPatches(land, Grid<int32_t>(sw, sh, 0), .02 * calmB * area);
+        for (int y = 0; y < sh; ++y)
+            for (int x = 0; x < sw; ++x) ground0.at(x, y) = land.at(x / 2 * 2, y / 2 * 2);
+    }
     bool have = false;
     double best = 0;
     Grid<int32_t> wall, ground;
     for (int c = 0; c < (small ? 2 : 1); ++c) {
-        auto [wv, gv] = drawFromNet(m, raster, ground0, want, rng, 16, pool, progress);
+        auto [wv, gv] = drawFromNet(m, raster, ground0, want, rng, 16, pool, progress, fixedWalls, gBias);
         wv = thinNorthEdges(tidyWalls(wv, raster, rng));
+        if (p.coherence > 0) wv = extra::dropShortWalls(wv, static_cast<int>(12 + 16 * calmT), 0);
         int walls = 0;
         for (int y = R; y < sh - R; ++y)
             for (int x = R; x < sw - R; ++x) walls += wv.at(x, y) > 0;
@@ -738,16 +838,63 @@ Sketch drawSketch(const LearnedModel& m, const Params& p, nn::Pool& pool, const 
         mirrorSketch(wall, p.symmetry, true);
         mirrorSketch(ground, p.symmetry, false);
     }
-    ground = oneGroundPerWall(wall, ground);
+    if (calmB > 0) {
+        for (int32_t& g : ground.v) if (g > 3) g = 0;
+        ground = extra::narrowRim(wall, ground);
+        ground = extra::dropSmallPatches(ground, wall, .02 * calmB * area);
+        ground = extra::narrowRim(wall, ground);
+    } else {
+        ground = oneGroundPerWall(wall, ground);
+    }
+
+    // Volcano sites (with symmetry in the base half, mirrored along), then the lava cores.
+    std::vector<extra::VolcanoSite> sites;
+    const int counts[3] = {std::max(0, p.volcanoSizes[0]), std::max(0, p.volcanoSizes[1]), std::max(0, p.volcanoSizes[2])};
+    if (counts[0] + counts[1] + counts[2] > 0) {
+        Grid<int32_t> index(sw, sh);
+        std::iota(index.v.begin(), index.v.end(), 0);
+        Grid<int32_t> image = index;
+        if (p.symmetry != Sym::None) mirrorSketch(image, p.symmetry, false);
+        Mask moved(sw, sh);
+        for (size_t i = 0; i < moved.v.size(); ++i) moved.v[i] = image.v[i] != index.v[i];
+        const Mask movedNear = dilate4(moved, 8);
+        Mask allowed(sw, sh);
+        for (size_t i = 0; i < allowed.v.size(); ++i) allowed.v[i] = !movedNear.v[i];
+        Rng r68 = stream(p.seed, 68);
+        sites = extra::volcanoSites(ground, wall, counts, R, R, sw - R, sh - R, r68, &allowed);
+        if (p.symmetry != Sym::None) {
+            mirrorSketch(ground, p.symmetry, false);
+            std::vector<extra::VolcanoSite> all;
+            for (const auto& s : sites)
+                for (size_t i = 0; i < image.v.size(); ++i)
+                    if (image.v[i] == index.at(s.x, s.y))
+                        all.push_back({static_cast<int>(i) / sw, static_cast<int>(i) % sw, s.size, s.lava, s.r});
+            sites = std::move(all);
+        }
+    }
+    Rng r64 = stream(p.seed, 64);
+    Mask lava = extra::lavaPlan(ground, wall, std::clamp(p.lavaRock, 0.0, 1.0), r64);
+    for (const auto& s : sites)
+        for (int y = 0; y < sh; ++y)
+            for (int x = 0; x < sw; ++x) {
+                const int d = (y - s.y) * (y - s.y) + (x - s.x) * (x - s.x);
+                if (d <= (s.r + 2) * (s.r + 2)) lava.at(x, y) = 0;
+                if (s.lava && d <= s.r * s.r) lava.at(x, y) = 1;
+            }
+    if (p.symmetry != Sym::None) mirrorSketch(lava, p.symmetry, false);
+
     // Crop only now: walls run off the map.
     Sketch sk;
     sk.wall = Grid<int32_t>(sw - 2 * R, sh - 2 * R);
     sk.ground = Grid<int32_t>(sw - 2 * R, sh - 2 * R);
+    sk.lava = Mask(sw - 2 * R, sh - 2 * R);
     for (int y = 0; y < sk.wall.h; ++y)
         for (int x = 0; x < sk.wall.w; ++x) {
             sk.wall.at(x, y) = wall.at(x + R, y + R);
             sk.ground.at(x, y) = ground.at(x + R, y + R);
+            sk.lava.at(x, y) = lava.at(x + R, y + R);
         }
+    for (const auto& s : sites) sk.volcanoes.push_back({s.y - R, s.x - R, s.size, s.lava, s.r});
     sk.zones = Grid<int8_t>(p.width, p.height);
     for (int y = 0; y < p.height; ++y)
         for (int x = 0; x < p.width; ++x) sk.zones.at(x, y) = z.at(x + kWorldMargin, y + kWorldMargin);

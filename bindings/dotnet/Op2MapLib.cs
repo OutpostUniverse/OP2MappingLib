@@ -779,7 +779,10 @@ namespace Op2MapLib
         /// Sets a numeric setting: width, height, roughness, symmetry (<see cref="MapSymmetry"/>),
         /// spawns, spawn_clearance, cliffs, ramps, volcanoes, lava_zone_tiles, smooth,
         /// vegetation_spacing, min_biome, details, landscape, rivers; mountains, mountain_density, gorges,
-        /// valleys, plateaus, mountain_spread, world_cutout, learned_rocks. See op2maplib.h for meanings and defaults.
+        /// valleys, plateaus, mountain_spread, world_cutout, learned_rocks; learned generator only: biome_calm,
+        /// coherence, calm_terrain, lava_rock, volcanoes_small, volcanoes_medium, volcanoes_large, craters, cracks,
+        /// debris, gradient, gradient_ground_start, gradient_ground_end, gradient_terrain_start, gradient_terrain_end.
+        /// See op2maplib.h for meanings and defaults.
         /// </summary>
         /// <exception cref="ArgumentException">Unknown key or invalid value.</exception>
         public void Set(string key, double value)
