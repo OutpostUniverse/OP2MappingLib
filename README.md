@@ -322,7 +322,7 @@ Differences from the editor's generator:
 
 ## Status
 
-- Version 0.3.4. Blending works for mud, rock and sand (and lava/rock).
+- Version 0.3.5. Blending works for mud, rock and sand (and lava/rock).
   Cliffs work for mud and sand, and every other ground uses mud cliffs.
   Passable regions (enclosed areas) work for any map. The map generator
   covers everything the editor's generator does, including mountains and the

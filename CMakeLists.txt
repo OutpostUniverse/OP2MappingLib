@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(op2maplib VERSION 0.3.4 LANGUAGES CXX)
+project(op2maplib VERSION 0.3.5 LANGUAGES CXX)
 
 # op2maplib - reusable map-editing algorithms for Outpost 2 map tools, with a
 # plain C API (include/op2maplib/op2maplib.h) for use from any language.
