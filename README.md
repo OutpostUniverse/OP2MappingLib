@@ -58,7 +58,10 @@ Modules:
   then paint the map tile by tile using only tile pairs seen in the originals.
   They run on the library's own inference code (no dependencies, the same map
   on every platform and for any thread count); the networks ship as
-  `profiles/op2-net.bin`. See [docs/learned-generator.md](docs/learned-generator.md).
+  `profiles/op2-net.bin`. A height plan of the whole map gives long cliffs
+  that grounds change at; lava rock, volcanoes in three sizes, craters, cracks,
+  debris and a gradient across the map (e.g. flat sand in the north, rugged
+  rock in the south). See [docs/learned-generator.md](docs/learned-generator.md).
 
 ## Layout
 
@@ -323,7 +326,7 @@ Differences from the editor's generator:
   Cliffs work for mud and sand, and every other ground uses mud cliffs.
   Passable regions (enclosed areas) work for any map. The map generator
   covers everything the editor's generator does, including mountains and the
-  learned generator of op2-codegen-editor 0.11.1.
+  learned generator of op2-codegen-editor 0.12.0.
 - The DLLs carry version details (company Outpost Universe). The .NET binding
   looks for the profile at `op2maplib\op2.json` next to it, and still accepts
   the older `op2maplib\profiles\op2.json`.
@@ -331,7 +334,7 @@ Differences from the editor's generator:
   and 64-bit) all pass and reproduce the same golden hashes
   (`tests/vectors/blend_disc.json`, `tests/vectors/cliff_l.json`,
   `tests/vectors/mapgen_islands.json`, `mapgen_mountains.json`,
-  `mapgen_learned.json`).
+  `mapgen_learned.json`, `mapgen_learned_full.json`).
 - Cliff quality, from `bindings/python/tests/test_cliffs.py`: 240 test walls
   (straight, sloped, L/U shapes, loops; all sides; heights 3–6).
   - Every wall was solved without the greedy fallback, with no holes and no

@@ -298,6 +298,14 @@ preview = gen.generate_learned(profile, model, LearnedQuality.SKETCH)   # about 
 result = gen.generate_learned(profile, model, LearnedQuality.FAST, progress=lambda f: True)
 ```
 
+Settings only the learned generator uses (the template sets the editor's
+values): `coherence` (a height plan of the whole map whose rims become long
+cliffs), `calm_terrain`, `biome_calm` (larger ground areas that change at
+cliffs), `lava_rock` (lava cores in rock), `volcanoes_small`, `_medium`,
+`_large`, `craters`, `cracks`, `debris`, and a `gradient` across the map with
+a ground and a terrain (flat .. rugged) for each end. Details in
+[learned-generator.md](learned-generator.md).
+
 In C: `om_mapgen_model_load`, `om_mapgen_generate_learned`, `om_mapgen_get_sketch`;
 in .NET: `LearnedModel.LoadDefault()`, `MapGenSettings.GenerateLearned`. A
 128×128 map takes 6–10 s. Details in [learned-generator.md](learned-generator.md).
